@@ -15,6 +15,10 @@ import pango  # Pango for text formatting in GUI
 import gobject  # GObject for Gwyddion object management
 from datetime import datetime  # Date/time for log timestamps
 import sys  # System operations for stderr redirection
+import time
+
+
+
 
 # Logging setup
 log_dir = tempfile.gettempdir()  # Get temporary directory for log file
@@ -62,24 +66,33 @@ ORIGINAL_MAX_KEY = "/%d/base/original_max"  # Key for original maximum
 
 # State management class to avoid global variables
 class PluginState:
-    def __init__(self):  # Initialize plugin state
-        self.macro = []  # List to store macro operations
-        self.liststore = gtk.ListStore(int, str, str)  # ListStore for macro table
-        self.channel_liststore = gtk.ListStore(bool, str, bool, object, int, str, gtk.gdk.Pixbuf, gtk.gdk.Pixbuf)  # ListStore for channels
-        self.window = None  # Main GUI window
-        self.palette_combobox = None  # ComboBox for palette selection
-        self.min_entry = None  # Entry for minimum color range
-        self.max_entry = None  # Entry for maximum color range
-        self.x_entry = None  # Entry for crop X coordinate
-        self.y_entry = None  # Entry for crop Y coordinate
-        self.width_entry = None  # Entry for crop width
-        self.height_entry = None  # Entry for crop height
-        self.create_new_check = None  # Checkbox for creating new image on crop
-        self.keep_offsets_check = None  # Checkbox for keeping offsets on crop
-        self.selection_connections = []  # List of selection signal connections
-        self.timeout_id = None  # ID for selection check timeout
-        self.current_container = None  # Current Gwyddion container
-        self.current_data_id = None  # Current data ID
+    def __init__(self):
+        self.macro = []
+        self.liststore = gtk.ListStore(int, str, str)
+        self.channel_liststore = gtk.ListStore(bool, str, bool, object, int, str, gtk.gdk.Pixbuf, gtk.gdk.Pixbuf)
+        self.window = None
+        self.palette_combobox = None
+        self.min_entry = None
+        self.max_entry = None
+        self.x_entry = None
+        self.y_entry = None
+        self.width_entry = None
+        self.height_entry = None
+        self.create_new_check = None
+        self.keep_offsets_check = None
+        self.selection_connections = []
+        self.timeout_id = None
+        self.current_container = None
+        self.current_data_id = None
+        self.select_all_check = None
+        self.select_dropdown = None
+        self.last_containers = None
+        self.data_browser_timeout_id = None
+        self.rename_entry = None  # New field for rename text entry
+
+# Global variable to track GUI instance
+_plugin_gui_instance = None
+_gui_close_signal = None
 
 # Log parsing functions
 def parse_log_entry(entry):  # Parse a single log entry
@@ -155,14 +168,84 @@ def show_message_dialog(msg_type, message, parent=None):  # Display message dial
     dialog.run()
     dialog.destroy()
 
+def show_rename_confirmation_dialog(new_names, parent):
+    """Show a dialog to confirm renaming selected channels."""
+    message = "The following channels will be renamed:\n\n"
+    for old_name, new_name, _, _, _ in new_names:
+        message += "%s -> %s\n" % (old_name, new_name)
+    dialog = gtk.MessageDialog(
+        parent=parent,
+        flags=gtk.DIALOG_MODAL,
+        type=gtk.MESSAGE_QUESTION,
+        buttons=gtk.BUTTONS_OK_CANCEL,
+        message_format=message
+    )
+    dialog.set_title("Confirm Rename")
+    response = dialog.run()
+    dialog.destroy()
+    logger.info("User %s rename operation", "confirmed" if response == gtk.RESPONSE_OK else "cancelled")
+    return response == gtk.RESPONSE_OK
+
+def apply_rename(button, channel_liststore, state):
+    """Rename selected DataChannels with the exact base name."""
+    base_name = state.rename_entry.get_text().strip()
+    if not base_name:
+        logger.error("No base name provided for renaming")
+        show_message_dialog(gtk.MESSAGE_ERROR, "Please enter a valid base name.")
+        return
+
+    selected = []
+    for row in channel_liststore:
+        checked, title, is_channel, container, data_id, filename, _, _ = row
+        if checked and container and is_channel and data_id != -1:
+            selected.append((container, data_id, title, filename))
+
+    if not selected:
+        logger.error("No channels selected for renaming")
+        show_message_dialog(gtk.MESSAGE_ERROR, "No channels selected for renaming")
+        return
+
+    # Prepare new names (same base name for all channels)
+    new_names = []
+    for container, data_id, title, filename in selected:
+        new_name = base_name
+        new_names.append((title, new_name, container, data_id, filename))
+
+    # Show confirmation dialog
+    if not show_rename_confirmation_dialog(new_names, state.window):
+        logger.info("Rename operation cancelled by user")
+        return
+
+    # Apply renaming
+    def operation(container, data_id, title, filename):
+        new_name = next(n for t, n, c, d, f in new_names if c == container and d == data_id)
+        container.set_string_by_name(TITLE_KEY % data_id, new_name)
+        logger.info("Renamed data_id %d from %s to %s in %s", data_id, title, new_name, filename)
+
+    process_selected_channels(
+        channel_liststore,
+        operation,
+        "No valid channels to rename",
+        "Renamed %d channels",
+        state
+    )
+    populate_data_channels(channel_liststore, state)
+
 # GUI creation
 def create_gui(state):  # Create main plugin GUI
+    global _plugin_gui_instance
+    if _plugin_gui_instance is not None:
+        logger.debug("GUI already open, closing existing window")
+        on_window_delete_event(_plugin_gui_instance, None, state)
+        return
+
     state.window = gtk.Window()  # Initialize main window
     state.window.set_title("AutoProcess")  # Set title
     state.window.set_resizable(True)
-    state.window.set_size_request(600, 500)  # Set minimum size
-    state.window.connect("delete-event", lambda w, e: on_window_delete_event(w, e, state))  # Connect close event
+    state.window.set_size_request(600, 500)  # Connect close event
+    state.window.connect("delete-event", lambda w, e: on_window_delete_event(w, e, state))
     logger.debug("Created main window")
+    _plugin_gui_instance = state.window
 
     vbox = gtk.VBox(spacing=5)  # Main vertical box
     state.window.add(vbox)
@@ -341,13 +424,19 @@ def create_gui(state):  # Create main plugin GUI
     separator4 = gtk.HSeparator()
     vbox.pack_start(separator4, False, False, 5)
     
-    # Open SPM Files section
+    # Open SPM Files and Rename Files section
+    hbox_spm_rename = gtk.HBox(spacing=2)
+    vbox.pack_start(hbox_spm_rename, False, False, 2)
+
+    # Open SPM Files subsection
+    vbox_spm = gtk.VBox(spacing=5)
+    hbox_spm_rename.pack_start(vbox_spm, False, False, 2)
+    
     OpenSPM_Files_label = gtk.Label()
     OpenSPM_Files_label.set_markup("<b>Open SPM Files</b>")
     OpenSPM_Files_label.set_alignment(0, 0.5)
-    vbox.pack_start(OpenSPM_Files_label, False, False, 2)
-    
-    # Select All and dropdown
+    vbox_spm.pack_start(OpenSPM_Files_label, False, False, 2)
+
     hbox_select = gtk.HBox(spacing=5)
     state.select_all_check = gtk.CheckButton("Select All")
     state.select_all_check.set_active(False)
@@ -368,7 +457,41 @@ def create_gui(state):  # Create main plugin GUI
     
     hbox_select.pack_start(state.select_all_check, False, False, 5)
     hbox_select.pack_start(state.select_dropdown, False, False, 5)
-    vbox.pack_start(hbox_select, False, False, 2)
+    vbox_spm.pack_start(hbox_select, False, False, 2)
+
+    separator5 = gtk.VSeparator()  # Vertical separator
+    hbox_spm_rename.pack_start(separator5, False, False, 2)
+    
+    # Rename Files subsection
+    vbox_rename = gtk.VBox(spacing=5)
+    hbox_spm_rename.pack_start(vbox_rename, False, False, 2)
+    
+    rename_files_label = gtk.Label()
+    rename_files_label.set_markup("<b>Rename Files</b>")
+    rename_files_label.set_alignment(0, 0.5)
+    vbox_rename.pack_start(rename_files_label, False, False, 2)
+    
+    hbox_rename = gtk.HBox(spacing=5)
+    label_base_name = gtk.Label("Base Name:")
+    label_base_name.set_size_request(80, -1)
+    hbox_rename.pack_start(label_base_name, False, False, 5)
+    state.rename_entry = gtk.Entry()
+    state.rename_entry.set_width_chars(15)
+    state.rename_entry.set_size_request(100, -1)
+    state.rename_entry.set_text("")  # Empty by default
+    hbox_rename.pack_start(state.rename_entry, False, False, 5)
+    apply_rename_button = gtk.Button("Apply Rename")
+    apply_rename_button.connect("clicked", lambda b: apply_rename(b, state.channel_liststore, state))
+    hbox_rename.pack_start(apply_rename_button, False, False, 1)
+    vbox_rename.pack_start(hbox_rename, False, False, 2)
+
+    separator6 = gtk.VSeparator()  # Vertical separator for Save as .gwy
+    hbox_spm_rename.pack_start(separator6, False, False, 2)
+
+    # Save as .gwy button
+    save_gwy_button = gtk.Button("Save as .gwy")
+    save_gwy_button.connect("clicked", lambda b: save_as_gwy(b, state.channel_liststore, state))
+    hbox_spm_rename.pack_start(save_gwy_button, False, False, 2)
     
     # SPM File and Channel table
     scrolled_channels = gtk.ScrolledWindow()
@@ -412,9 +535,252 @@ def create_gui(state):  # Create main plugin GUI
 
     state.window.set_default_size(600, 600)
     state.window.show_all()
-    gtk.main()  # Start GTK main loop
 
+import os
+import gwy
+import gtk
+from datetime import datetime
+
+# Store last selected directory
+LAST_SAVE_DIR = os.path.expanduser("~/Desktop")
+
+def save_last_dir(save_dir):
+    """Save the last selected directory to a file."""
+    try:
+        with open(os.path.expanduser("~/.gwyddion_last_dir"), "w") as f:
+            f.write(save_dir)
+        logger.info("Saved last directory: %s", save_dir)
+    except Exception as e:
+        logger.warning("Failed to save last directory: %s", str(e))
+
+def load_last_dir():
+    """Load the last selected directory from a file."""
+    try:
+        with open(os.path.expanduser("~/.gwyddion_last_dir"), "r") as f:
+            last_dir = f.read().strip()
+        if os.path.isdir(last_dir) and os.access(last_dir, os.W_OK):
+            logger.info("Loaded last directory: %s", last_dir)
+            return last_dir
+        else:
+            logger.warning("Last directory %s is invalid or non-writable", last_dir)
+    except Exception:
+        logger.info("No last directory found, using Desktop")
+    return os.path.expanduser("~/Desktop")
+
+def show_save_confirmation_dialog(save_files, parent):
+    """Show a dialog to confirm saving .gwy files."""
+    message = "The following files will be saved:\n\n"
+    for filename, channels, path in save_files:
+        message += "%s: %s -> %s\n" % (filename, ", ".join(channels), path)
+    dialog = gtk.MessageDialog(
+        parent=parent,
+        flags=gtk.DIALOG_MODAL,
+        type=gtk.MESSAGE_QUESTION,
+        buttons=gtk.BUTTONS_OK_CANCEL,
+        message_format=message
+    )
+    dialog.set_title("Confirm Save as .gwy")
+    response = dialog.run()
+    dialog.destroy()
+    logger.info("User %s save as .gwy operation", "confirmed" if response == gtk.RESPONSE_OK else "cancelled")
+    return response == gtk.RESPONSE_OK
+
+def get_save_dir(parent):
+    """Prompt user to select a single save directory for all SPM files."""
+    global LAST_SAVE_DIR
+    dialog = gtk.FileChooserDialog(
+        title="Select Save Directory for All SPM Files",
+        parent=parent,
+        action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER,
+        buttons=(gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL, gtk.STOCK_OK, gtk.RESPONSE_OK)
+    )
+    dialog.set_current_folder(load_last_dir())
+    response = dialog.run()
+    if response == gtk.RESPONSE_OK:
+        save_dir = dialog.get_filename()
+        logger.info("User selected save directory: %s", save_dir)
+    else:
+        save_dir = os.path.expanduser("~/Desktop")
+        logger.info("User cancelled directory selection, using Desktop")
+    dialog.destroy()
+    if not os.access(save_dir, os.W_OK):
+        logger.warning("No write access to %s, falling back to Desktop", save_dir)
+        save_dir = os.path.expanduser("~/Desktop")
+    LAST_SAVE_DIR = save_dir
+    save_last_dir(save_dir)
+    return save_dir
+
+def ensure_processing_log(container, data_id, filename, log_file="c:\\users\\allani\\appdata\\local\\temp\\SPM_autoprocess.log"):
+    """Ensure processing log is set in the container for a data_id."""
+    try:
+        with open(log_file, "r") as f:
+            lines = f.readlines()
+        log_entries = []
+        search_str = "data_id %d in %s" % (data_id, filename)
+        for line in lines:
+            if search_str in line:
+                for op in ["Ran ", "Cropped "]:
+                    if op in line:
+                        timestamp = line.split(" ")[0]
+                        operation = line.split(" ")[-1].strip()
+                        if op == "Ran ":
+                            operation = line.split("Ran ")[1].split(" on ")[0].strip()
+                            log_entries.append("proc::%s@%s" % (operation, timestamp))
+                        elif op == "Cropped ":
+                            crop_line = next((l for l in lines if "Cropped in place data_id %d" % data_id in l), None)
+                            if crop_line:
+                                crop_params = next((l for l in lines if "tool::GwyToolCrop" in l and "data_id %d" % data_id in l), None)
+                                if crop_params:
+                                    log_entries.append(crop_params.strip())
+        log_value = "\n".join(log_entries) if log_entries else None
+        if log_value:
+            container.set_string_by_name("/%d/log" % data_id, log_value)
+            logger.info("Set processing log for data_id %d in %s", data_id, filename)
+        else:
+            logger.warning("No processing log constructed for data_id %d in %s", data_id, filename)
+    except Exception as e:
+        logger.warning("Failed to set log for data_id %d in %s: %s", data_id, filename, str(e))
+
+def ensure_color_range(container, data_id, filename):
+    """Ensure color range is set in the container for a data_id."""
+    try:
+        data_field = container.get_object_by_name("/%d/data" % data_id)
+        if not container.contains_by_name("/%d/base/range" % data_id):
+            min_val, max_val = gwy.gwy_data_field_get_min_max(data_field)
+            container.set_value_by_name("/%d/base/range" % data_id, (min_val, max_val))
+            logger.info("Set fallback color range for data_id %d in %s: min=%f, max=%f", data_id, filename, min_val, max_val)
+        if not container.contains_by_name("/%d/base/range-type" % data_id):
+            container.set_int32_by_name("/%d/base/range-type" % data_id, 1)  # GWY_LAYER_RANGE_FIXED
+            logger.info("Set fixed color range type for data_id %d in %s", data_id, filename)
+    except Exception as e:
+        logger.warning("Failed to set color range for data_id %d in %s: %s", data_id, filename, str(e))
+
+def save_as_gwy(button, channel_liststore, state):
+    """Save selected DataChannels as .gwy files named after their SPM files."""
+    DATA_KEY = "/%d/data"
+    TITLE_KEY = "/%d/data/title"
+    SHOW_KEY = "/%d/data/visible"
+    PALETTE_KEY = "/%d/base/palette"
+    LOG_KEY = "/%d/log"
+    RANGE_KEY = "/%d/base/range"
+    RANGE_TYPE_KEY = "/%d/base/range-type"
+
+    selected = []
+    seen_ids = set()
+    for row in channel_liststore:
+        checked, title, is_channel, container, data_id, filename, _, _ = row
+        if checked and container and is_channel and data_id != -1:
+            unique_key = (filename, data_id)
+            if unique_key not in seen_ids:
+                logger.info("Processing channel: title=%s, data_id=%d, filename=%s", title, data_id, filename)
+                selected.append((container, data_id, title, filename))
+                seen_ids.add(unique_key)
+
+    if not selected:
+        logger.error("No channels selected for saving")
+        show_message_dialog(gtk.MESSAGE_ERROR, "No channels selected for saving")
+        return
+
+    # Group channels by SPM file (filename)
+    file_groups = {}
+    for container, data_id, title, filename in selected:
+        if filename not in file_groups:
+            file_groups[filename] = []
+        file_groups[filename].append((container, data_id, title))
+
+    if not file_groups:
+        logger.error("No valid SPM files found for selected channels")
+        show_message_dialog(gtk.MESSAGE_ERROR, "No valid SPM files found for saving")
+        return
+
+    # Get single save directory for all files
+    save_dir = get_save_dir(state.window)
+    logger.info("Using save directory for all files: %s", save_dir)
+
+    # Prepare save paths
+    save_files = []
+    for filename, channels in file_groups.items():
+        base_name = os.path.splitext(os.path.basename(filename))[0]
+        save_path = os.path.join(save_dir, "%s.gwy" % base_name)
+        counter = 1
+        while os.path.exists(save_path):
+            save_path = os.path.join(save_dir, "%s_processed_%d.gwy" % (base_name, counter))
+            counter += 1
+        save_files.append((base_name, [title for _, _, title in channels], save_path))
+
+    # Show confirmation dialog
+    if not show_save_confirmation_dialog(save_files, state.window):
+        logger.info("Save as .gwy operation cancelled by user")
+        return
+
+    # Save each group as a .gwy file
+    def save_group(filename, channels, save_path):
+        logger.info("Attempting to save %d channels to %s", len(channels), save_path)
+        # Use the first container as the base, as it contains all channels
+        container = channels[0][0]
+        success = True
+        # Ensure logs and color ranges are set for each channel
+        for _, data_id, title in channels:
+            try:
+                if not container.contains_by_name(DATA_KEY % data_id):
+                    logger.error("No data field found for data_id %d (%s) in %s", data_id, title, filename)
+                    success = False
+                    continue
+                # Ensure processing log
+                ensure_processing_log(container, data_id, filename)
+                # Ensure color range
+                ensure_color_range(container, data_id, filename)
+                logger.info("Prepared data_id %d (%s) for %s", data_id, title, save_path)
+            except Exception as e:
+                logger.error("Failed to prepare data_id %d (%s) for %s: %s", data_id, title, save_path, str(e))
+                success = False
+        try:
+            # Try gwy_file_save first
+            operation = gwy.gwy_file_save(container, save_path, gwy.RUN_NONINTERACTIVE)
+            if operation == 0:
+                logger.warning("gwy_file_save failed, falling back to gwy_file_func_run_save")
+                # Fallback to explicit .gwy save
+                success = gwy.gwy_file_func_run_save("gwyddion", container, save_path, gwy.RUN_NONINTERACTIVE)
+                if not success:
+                    logger.error("Failed to save %s using gwy_file_func_run_save", save_path)
+                    show_message_dialog(gtk.MESSAGE_ERROR, "Failed to save %s" % save_path)
+                    return False
+            if not os.path.exists(save_path):
+                logger.error("File %s was not created", save_path)
+                show_message_dialog(gtk.MESSAGE_ERROR, "File %s was not created" % save_path)
+                return False
+            logger.info("Saved %d channels to %s", len(channels), save_path)
+            return success
+        except Exception as e:
+            logger.error("Failed to save %s: %s", save_path, str(e))
+            show_message_dialog(gtk.MESSAGE_ERROR, "Failed to save %s: %s" % (save_path, str(e)))
+            return False
+
+    # Process each file group and count successes
+    success_count = 0
+    for filename, channels in file_groups.items():
+        save_path = next(path for fname, _, path in save_files if fname == os.path.splitext(os.path.basename(filename))[0])
+        if save_group(filename, channels, save_path):
+            success_count += len(channels)
+
+    if success_count == 0:
+        logger.error("No items successfully processed")
+        show_message_dialog(gtk.MESSAGE_ERROR, "No items successfully processed")
+    else:
+        logger.info("Saved %d channels as .gwy files", success_count)
+        show_message_dialog(gtk.MESSAGE_INFO, "Saved %d channels as .gwy files" % success_count)
+
+    populate_data_channels(channel_liststore, state)
+
+# window close handler
 def on_window_delete_event(widget, event, state):  # Handle window close
+    # Clear GUI open flag
+    container = gwy.gwy_app_data_browser_get_containers()[0]
+    gui_key = "/module/autoprocess/gui_open"
+    if container.contains_by_name(gui_key):
+        container.set_boolean_by_name(gui_key, False)
+        logger.debug("Cleared GUI open flag in container")
+    
     if state.timeout_id is not None:
         gobject.source_remove(state.timeout_id)  # Remove selection timeout
         state.timeout_id = None
@@ -447,8 +813,10 @@ def on_window_delete_event(widget, event, state):  # Handle window close
             logger.removeHandler(handler)  # Remove logger handlers
     logger.removeHandler(console_handler)
     
+    state.window.destroy()  # Destroy the window
     state.window = None
-    return False
+    logger.debug("GUI instance closed and cleared")
+    return True  # Prevent default GTK behavior
 
 # Channel and file management
 def toggle_channel_selection(cell, path, channel_liststore):  # Toggle channel checkbox
@@ -766,7 +1134,7 @@ def process_selected_channels(channel_liststore, operation, no_selection_msg, su
             success_count += 1
         except Exception as e:
             logger.error("Failed to process %s, data_id %d: %s", filename, data_id, str(e))
-            show_message_dialog(gtk.MESSAGE_ERROR, "Failed to process %s, data_id %d: %s" % (filename, data_id, str(e)))
+            #show_message_dialog(gtk.MESSAGE_ERROR, "Failed to process %s, data_id %d: %s" % (filename, data_id, str(e)))
     
     if success_count > 0:
         logger.info(success_msg % success_count)
@@ -900,7 +1268,7 @@ def set_zero_to_minimum(button, channel_liststore, state):  # Set minimum to zer
     process_selected_channels(channel_liststore, operation, "No channels selected for set zero to minimum",
                              "Zero to minimum applied to %d channels", state)
 
-def apply_crop(button, channel_liststore, state):  # Apply cropping
+def apply_crop(button, channel_liststore, state):
     try:
         x = int(state.x_entry.get_text().strip())
         y = int(state.y_entry.get_text().strip())
@@ -913,62 +1281,156 @@ def apply_crop(button, channel_liststore, state):  # Apply cropping
         show_message_dialog(gtk.MESSAGE_ERROR, "Invalid crop parameters. Please enter valid integer values.")
         return
 
-    def operation(container, data_id, title, filename):
+    # Scan selected channels for dimension compatibility
+    selected = []
+    valid_channels = []
+    invalid_channels = []
+    for row in channel_liststore:
+        checked, title, is_channel, container, data_id, filename, _, _ = row
+        if checked and container and (is_channel or data_id == -1):
+            selected.append((container, data_id, title, filename))
+    
+    if not selected:
+        logger.error("No files or channels selected for cropping")
+        show_message_dialog(gtk.MESSAGE_ERROR, "No files or channels selected for cropping")
+        return
+
+    for container, data_id, title, filename in selected:
         if data_id == -1:
-            for did in gwy.gwy_app_data_browser_get_data_ids(container):
-                crop_channel(container, did, title, filename, x, y, width, height, create_new, keep_offsets)
+            data_ids = gwy.gwy_app_data_browser_get_data_ids(container)
         else:
-            crop_channel(container, data_id, title, filename, x, y, width, height, create_new, keep_offsets)
-
-    def crop_channel(container, data_id, title, filename, x, y, width, height, create_new, keep_offsets):
-        data_field = container.get_object_by_name(DATA_KEY % data_id)
-        if not data_field:
-            raise ValueError("No data field for data_id %d" % data_id)
-        valid, error_msg = validate_crop_params(data_field, x, y, width, height, title, filename)
-        if not valid:
-            raise ValueError(error_msg)
-        log_entry = "tool::GwyToolCrop(all=%s, hold_selection=4, keep_offsets=%s, new_channel=%s, x=%d, y=%d, width=%d, height=%d)@%s" % (
-            str(data_id == -1), str(keep_offsets), str(create_new), x, y, width, height, datetime.now().isoformat())
-        logger.info(log_entry)
-        log_key = "/%d/log" % data_id
-        current_log = container.get_string_by_name(log_key) or ""
-        container.set_string_by_name(log_key, current_log + log_entry + "\n")
-        logger.debug("Manually added log entry to %s for data_id %d", log_key, data_id)
-        new_id = None
-        if create_new:
-            new_data_field = data_field.area_extract(x, y, width, height)
-            new_id = gwy.gwy_app_data_browser_add_data_field(new_data_field, container, True)
-            old_title = container.get_string_by_name(TITLE_KEY % data_id) or "Data %d" % data_id
-            container.set_string_by_name(TITLE_KEY % new_id, old_title + " (Cropped)")
-            if container.contains_by_name("/%d/base" % data_id):
-                new_data_field.copy(container.get_object_by_name(DATA_KEY % data_id), True)
-            dx, dy = data_field.get_dx(), data_field.get_dy()
-            new_data_field.set_xreal(width * dx)
-            new_data_field.set_yreal(height * dy)
-            if keep_offsets:
-                new_data_field.set_xoffset(data_field.get_xoffset() + x * dx)
-                new_data_field.set_yoffset(data_field.get_yoffset() + y * dy)
+            data_ids = [data_id]
+        for did in data_ids:
+            data_field = container.get_object_by_name(DATA_KEY % did)
+            if not data_field:
+                invalid_channels.append((container, did, title, filename, "No data field"))
+                continue
+            valid, error_msg = validate_crop_params(data_field, x, y, width, height, title, filename)
+            if valid:
+                valid_channels.append((container, did, title, filename))
             else:
-                new_data_field.set_xoffset(0.0)
-                new_data_field.set_yoffset(0.0)
-            new_data_field.data_changed()
-            if container:
-                gwy.gwy_app_data_browser_select_data_field(container, new_id)
-            logger.info("Cropped to new data_id %d in %s", new_id, filename)
-        else:
-            data_field.resize(x, y, x + width, y + height)
-            data_field.data_changed()
-            if container:
-                gwy.gwy_app_data_browser_select_data_field(container, data_id)
-            logger.info("Cropped in place data_id %d in %s", data_id, filename)
+                invalid_channels.append((container, did, title, filename, error_msg))
 
-    try:
-        process_selected_channels(channel_liststore, operation, "No files or channels selected for cropping",
+    if invalid_channels:
+        response = show_crop_conflict_dialog(invalid_channels, valid_channels, channel_liststore, state, x, y, width, height, create_new, keep_offsets)
+        if response in ["cancel", "cancel_list"]:
+            logger.info("Crop operation cancelled by user")
+            return
+        # Proceed with valid channels only
+        selected = valid_channels
+    else:
+        selected = valid_channels
+
+    def operation(container, data_id, title, filename):
+        crop_channel(container, data_id, title, filename, x, y, width, height, create_new, keep_offsets)
+
+    if selected:
+        process_selected_channels(channel_liststore, operation, "No valid channels to crop",
                                  "Cropping applied to %d items", state)
-    except Exception as e:
-        logger.error("Failed to process %s, data_id %d: %s", filename, data_id, str(e))
-        show_message_dialog(gtk.MESSAGE_ERROR, "Failed to process %s, data_id %d: %s" % (filename, data_id, str(e)))
-    populate_data_channels(channel_liststore, state)
+        populate_data_channels(channel_liststore, state)
+    else:
+        logger.error("No valid channels to crop after validation")
+        show_message_dialog(gtk.MESSAGE_ERROR, "No valid channels to crop after validation")
+
+def crop_channel(container, data_id, title, filename, x, y, width, height, create_new, keep_offsets):
+    data_field = container.get_object_by_name(DATA_KEY % data_id)
+    if not data_field:
+        raise ValueError("No data field for data_id %d" % data_id)
+    valid, error_msg = validate_crop_params(data_field, x, y, width, height, title, filename)
+    if not valid:
+        raise ValueError(error_msg)
+    log_entry = "tool::GwyToolCrop(all=%s, hold_selection=4, keep_offsets=%s, new_channel=%s, x=%d, y=%d, width=%d, height=%d)@%s" % (
+        str(data_id == -1), str(keep_offsets), str(create_new), x, y, width, height, datetime.now().isoformat())
+    logger.info(log_entry)
+    log_key = "/%d/log" % data_id
+    current_log = container.get_string_by_name(log_key) or ""
+    container.set_string_by_name(log_key, current_log + log_entry + "\n")
+    logger.debug("Manually added log entry to %s for data_id %d", log_key, data_id)
+    new_id = None
+    if create_new:
+        new_data_field = data_field.area_extract(x, y, width, height)
+        new_id = gwy.gwy_app_data_browser_add_data_field(new_data_field, container, True)
+        old_title = container.get_string_by_name(TITLE_KEY % data_id) or "Data %d" % data_id
+        container.set_string_by_name(TITLE_KEY % new_id, old_title + " (Cropped)")
+        if container.contains_by_name("/%d/base" % data_id):
+            new_data_field.copy(container.get_object_by_name(DATA_KEY % data_id), True)
+        dx, dy = data_field.get_dx(), data_field.get_dy()
+        new_data_field.set_xreal(width * dx)
+        new_data_field.set_yreal(height * dy)
+        if keep_offsets:
+            new_data_field.set_xoffset(data_field.get_xoffset() + x * dx)
+            new_data_field.set_yoffset(data_field.get_yoffset() + y * dy)
+        else:
+            new_data_field.set_xoffset(0.0)
+            new_data_field.set_yoffset(0.0)
+        new_data_field.data_changed()
+        if container:
+            gwy.gwy_app_data_browser_select_data_field(container, new_id)
+        logger.info("Cropped to new data_id %d in %s", new_id, filename)
+    else:
+        data_field.resize(x, y, x + width, y + height)
+        data_field.data_changed()
+        if container:
+            gwy.gwy_app_data_browser_select_data_field(container, data_id)
+        logger.info("Cropped in place data_id %d in %s", data_id, filename)
+
+def show_crop_conflict_dialog(invalid_channels, valid_channels, channel_liststore, state, x, y, width, height, create_new, keep_offsets):
+    total_channels = len(invalid_channels) + len(valid_channels)
+    message = "%d out of %d selected DataChannels cannot be processed. Proceed without them?" % (len(invalid_channels), total_channels)
+    dialog = gtk.MessageDialog(
+        parent=state.window,
+        flags=gtk.DIALOG_MODAL,
+        type=gtk.MESSAGE_WARNING,
+        buttons=gtk.BUTTONS_NONE,
+        message_format=message
+    )
+    dialog.add_button("Cancel", gtk.RESPONSE_CANCEL)
+    dialog.add_button("Proceed", gtk.RESPONSE_OK)
+    dialog.add_button("Cancel and list conflicts", gtk.RESPONSE_REJECT)
+    dialog.add_button("Proceed and list conflicts", gtk.RESPONSE_APPLY)
+    dialog.set_default_response(gtk.RESPONSE_CANCEL)
+    response = dialog.run()
+    dialog.destroy()
+
+    response_map = {
+        gtk.RESPONSE_CANCEL: "cancel",
+        gtk.RESPONSE_OK: "proceed",
+        gtk.RESPONSE_REJECT: "cancel_list",
+        gtk.RESPONSE_APPLY: "proceed_list"
+    }
+    response_str = response_map.get(response, "cancel")
+
+    if response_str in ["cancel_list", "proceed_list"]:
+        show_conflict_list_dialog(invalid_channels, state.window)
+
+    logger.info("User selected %s for crop conflict dialog", response_str)
+    return response_str
+
+def show_conflict_list_dialog(invalid_channels, parent):
+    dialog = gtk.Dialog(
+        title="Crop Conflicts",
+        parent=parent,
+        flags=gtk.DIALOG_MODAL,
+        buttons=(gtk.STOCK_OK, gtk.RESPONSE_OK)
+    )
+    dialog.set_default_size(600, 300)
+
+    scrolled = gtk.ScrolledWindow()
+    scrolled.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
+    liststore = gtk.ListStore(str, str, str)
+    for container, data_id, title, filename, error_msg in invalid_channels:
+        liststore.append([title, filename, error_msg])
+
+    treeview = gtk.TreeView(liststore)
+    treeview.append_column(gtk.TreeViewColumn("Channel", gtk.CellRendererText(), text=0))
+    treeview.append_column(gtk.TreeViewColumn("File", gtk.CellRendererText(), text=1))
+    treeview.append_column(gtk.TreeViewColumn("Error", gtk.CellRendererText(), text=2))
+    scrolled.add(treeview)
+    dialog.vbox.pack_start(scrolled, True, True, 5)
+    dialog.show_all()
+    dialog.run()
+    dialog.destroy()
+    logger.info("Displayed conflict list dialog with %d invalid channels", len(invalid_channels))
 
 def replay_selected_channels(button, channel_liststore, state):  # Replay macro on channels
     if not state.macro:
@@ -1176,13 +1638,36 @@ def sync_select_all_check(checkbutton, channel_liststore, select_store):  # Sync
     
     logger.debug("%s all channels and dropdown states", "Selected" if select_all_state else "Deselected")
 
-# Core plugin execution
+#plugin entry point
 def run(data, mode):  # Main plugin entry point
+    global _gui_close_signal
+    # Check for existing GUI in Gwyddion's data browser
+    container = gwy.gwy_app_data_browser_get_containers()[0]
+    gui_key = "/module/autoprocess/gui_open"
+    if container.contains_by_name(gui_key) and container.get_boolean_by_name(gui_key):
+        logger.debug("GUI already open, showing message dialog and emitting close signal")
+        # Show message dialog
+        dialog = gtk.MessageDialog(
+            parent=None,
+            flags=gtk.DIALOG_MODAL,
+            type=gtk.MESSAGE_INFO,
+            buttons=gtk.BUTTONS_OK,
+            message_format="AutoProcess GUI is already open."
+        )
+        dialog.run()
+        dialog.destroy()
+        if _gui_close_signal is not None:
+            gobject.signal_emit(_gui_close_signal, "close-gui")
+        return  # Exit without creating new GUI
+
+    state = PluginState()
     key = gwy.gwy_app_data_browser_get_current(gwy.APP_DATA_FIELD_KEY)
     gwy.gwy_app_undo_qcheckpoint(data, [key])  # Create undo checkpoint
-    state = PluginState()
     create_gui(state)  # Initialize GUI
-
-if __name__ == "__main__":  # Direct execution for testing
-    logger.info("Plugin executed directly")
-    run(None, None)
+    # Set GUI open flag
+    container.set_boolean_by_name(gui_key, True)
+    logger.debug("Set GUI open flag in container")
+    # Register close signal
+    if _gui_close_signal is None:
+        _gui_close_signal = gobject.signal_new("close-gui", gtk.Window, gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ())
+    state.window.connect("close-gui", lambda w: on_window_delete_event(w, None, state))
