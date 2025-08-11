@@ -88,11 +88,11 @@ class PluginState:
         self.select_dropdown = None
         self.last_containers = None
         self.data_browser_timeout_id = None
-        self.rename_entry = None  # New field for rename text entry
+        self.rename_entry = None  
+        self.select_store = None
 
 # Global variable to track GUI instance
 _plugin_gui_instance = None
-_gui_close_signal = None
 
 # Log parsing functions
 def parse_log_entry(entry):  # Parse a single log entry
@@ -231,139 +231,121 @@ def apply_rename(button, channel_liststore, state):
     )
     populate_data_channels(channel_liststore, state)
 
-# GUI creation
-def create_gui(state):  # Create main plugin GUI
+# Module-level signal setup
+_gui_close_signal = None
+if not gobject.signal_lookup("close-gui", gtk.Window):
+    _gui_close_signal = gobject.signal_new(
+        "close-gui", gtk.Window, gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()
+    )
+
+def create_gui(state):
+    """Create main plugin GUI with initialized ComboBox model."""
     global _plugin_gui_instance
     if _plugin_gui_instance is not None:
         logger.debug("GUI already open, closing existing window")
         on_window_delete_event(_plugin_gui_instance, None, state)
         return
 
-    state.window = gtk.Window()  # Initialize main window
-    state.window.set_title("AutoProcess")  # Set title
+    state.window = gtk.Window()
+    state.window.set_title("AutoProcess")
     state.window.set_resizable(True)
-    state.window.set_size_request(600, 500)  # Connect close event
+    state.window.set_size_request(680, 600)
     state.window.connect("delete-event", lambda w, e: on_window_delete_event(w, e, state))
     logger.debug("Created main window")
     _plugin_gui_instance = state.window
 
-    vbox = gtk.VBox(spacing=5)  # Main vertical box
-    state.window.add(vbox)
+    main_hbox = gtk.HBox(spacing=5)
+    state.window.add(main_hbox)
 
-    # Fixed Color Range section
-    color_range_label = gtk.Label()
-    color_range_label.set_markup("<b>Fixed Color Range</b>")
-    color_range_label.set_alignment(0, 0.5)
-    vbox.pack_start(color_range_label, False, False, 2)
+    left_vbox = gtk.VBox(spacing=5)
+    right_vbox = gtk.VBox(spacing=5)
+    right_vbox.set_size_request(305, -1)  # Fixed width for right part
+    main_hbox.pack_start(left_vbox, True, True, 2)  # Left part expands
+    main_hbox.pack_start(right_vbox, False, False, 2)  # Right part fixed
+
+    # Left side: Fixed Color Range
+    color_range_label = gtk.Label("<b>Fixed Color Range</b>")
+    color_range_label.set_use_markup(True)
+    color_range_label.set_alignment(0, 0.5)  # Align to the left
+    left_vbox.pack_start(color_range_label, False, False, 2)
     
-    hbox_color_range = gtk.HBox(spacing=5)  # Horizontal box for color range controls
-    label_min = gtk.Label("Min:")
-    hbox_color_range.pack_start(label_min, False, False, 5)
-    state.min_entry = gtk.Entry()  # Entry for min value
-    state.min_entry.set_width_chars(10)
-    hbox_color_range.pack_start(state.min_entry, False, False, 5)
-    label_max = gtk.Label("Max:")
-    hbox_color_range.pack_start(label_max, False, False, 5)
-    state.max_entry = gtk.Entry()  # Entry for max value
-    state.max_entry.set_width_chars(10)
-    hbox_color_range.pack_start(state.max_entry, False, False, 5)
-    apply_range_button = gtk.Button("Apply Fixed Range")  # Button to apply fixed range
+    # Main container for Min/Max labels, inputs, and buttons
+    color_range_vbox = gtk.VBox(spacing=5)
+    left_vbox.pack_start(color_range_vbox, False, False, 0)  # Disable vertical expansion
+    
+    # Row for Min label and input
+    hbox_min = gtk.HBox(spacing=5)
+    color_range_vbox.pack_start(hbox_min, True, True, 0)  # Allow horizontal resizing
+    
+    label_min = gtk.Label("Start:")
+    label_min.set_alignment(0, 0.5)  # Align to the left, vertically centered
+    hbox_min.pack_start(label_min, False, False, 0)
+    
+    state.min_entry = gtk.Entry()
+    hbox_min.pack_start(state.min_entry, True, True, 0)  # Allow it to expand and fill space horizontally
+    
+    # Row for Max label and input
+    hbox_max = gtk.HBox(spacing=5)
+    color_range_vbox.pack_start(hbox_max, True, True, 0)  # Allow horizontal resizing
+    
+    label_max = gtk.Label("End: ")
+    label_max.set_alignment(0, 0.5)  # Align to the left, vertically centered
+    hbox_max.pack_start(label_max, False, False, 0)
+    
+    state.max_entry = gtk.Entry() 
+    hbox_max.pack_start(state.max_entry, True, True, 0)  # Allow it to expand and fill space horizontally
+    
+    # Row for Min buttons
+    hbox_min_buttons = gtk.HBox(spacing=5)
+    color_range_vbox.pack_start(hbox_min_buttons, True, True, 0)  # Allow horizontal resizing
+    
+    apply_range_button = gtk.Button("Apply Fixed Range")
+    hbox_min_buttons.pack_start(apply_range_button, True, True, 0)
     apply_range_button.connect("clicked", lambda b: apply_fixed_color_range(b, state.channel_liststore, state))
-    hbox_color_range.pack_start(apply_range_button, False, False, 1)
-    full_range_button = gtk.Button("Full Range")  # Button to set full range
-    full_range_button.connect("clicked", lambda b: set_to_full_range(b, state.channel_liststore, state))
-    hbox_color_range.pack_start(full_range_button, False, False, 1)
-    invert_button = gtk.Button("Invert Mapping")  # Button to invert mapping
+    
+    invert_button = gtk.Button("Invert Mapping")
+    hbox_min_buttons.pack_start(invert_button, True, True, 0)
     invert_button.connect("clicked", lambda b: invert_mapping(b, state.channel_liststore, state))
-    hbox_color_range.pack_start(invert_button, False, False, 1)
-    zero_min_button = gtk.Button("Zero to Min")  # Button to set zero to minimum
+    
+    # Row for Max buttons
+    hbox_max_buttons = gtk.HBox(spacing=5)
+    color_range_vbox.pack_start(hbox_max_buttons, True, True, 0)  # Allow horizontal resizing
+    
+    full_range_button = gtk.Button("Set Full Range")
+    hbox_max_buttons.pack_start(full_range_button, True, True, 0)
+    full_range_button.connect("clicked", lambda b: set_to_full_range(b, state.channel_liststore, state))
+    
+    zero_min_button = gtk.Button("Zero to Min")
+    hbox_max_buttons.pack_start(zero_min_button, True, True, 0)
     zero_min_button.connect("clicked", lambda b: set_zero_to_minimum(b, state.channel_liststore, state))
-    hbox_color_range.pack_start(zero_min_button, False, False, 1)
-    vbox.pack_start(hbox_color_range, False, False, 2)
 
-    separator1 = gtk.HSeparator()  # Separator
-    vbox.pack_start(separator1, False, False, 5)
 
-    # Crop Data and Change Color section
-    hbox_section2 = gtk.HBox(spacing=2)
-    vbox.pack_start(hbox_section2, False, False, 2)
+    separator1 = gtk.HSeparator()
+    left_vbox.pack_start(separator1, False, False, 5)
 
-    # Crop Data subsection
-    vbox_crop = gtk.VBox(spacing=5)
-    hbox_section2.pack_start(vbox_crop, False, False, 2)
-    
-    crop_data_label = gtk.Label()
-    crop_data_label.set_markup("<b>Crop Data</b>")
-    crop_data_label.set_alignment(0, 0.5)
-    vbox_crop.pack_start(crop_data_label, False, False, 2)
-    
-    hbox_crop1 = gtk.HBox(spacing=5)  # Crop coordinates
-    label_x = gtk.Label("Origin X (px):")
-    label_x.set_size_request(80, -1)
-    hbox_crop1.pack_start(label_x, False, False, 5)
-    state.x_entry = gtk.Entry()
-    state.x_entry.set_width_chars(8)
-    state.x_entry.set_size_request(60, -1)
-    state.x_entry.set_text("0")
-    hbox_crop1.pack_start(state.x_entry, False, False, 5)
-    label_y = gtk.Label("Origin Y (px):")
-    label_y.set_size_request(80, -1)
-    hbox_crop1.pack_start(label_y, False, False, 5)
-    state.y_entry = gtk.Entry()
-    state.y_entry.set_width_chars(8)
-    state.y_entry.set_size_request(60, -1)
-    state.y_entry.set_text("0")
-    hbox_crop1.pack_start(state.y_entry, False, False, 5)
-    vbox_crop.pack_start(hbox_crop1, False, False, 2)
-    
-    hbox_crop2 = gtk.HBox(spacing=5)  # Crop dimensions
-    label_width = gtk.Label("Width (px):")
-    label_width.set_size_request(80, -1)
-    hbox_crop2.pack_start(label_width, False, False, 5)
-    state.width_entry = gtk.Entry()
-    state.width_entry.set_width_chars(8)
-    state.width_entry.set_size_request(60, -1)
-    state.width_entry.set_text("100")
-    hbox_crop2.pack_start(state.width_entry, False, False, 5)
-    label_height = gtk.Label("Height (px):")
-    label_height.set_size_request(80, -1)
-    hbox_crop2.pack_start(label_height, False, False, 5)
-    state.height_entry = gtk.Entry()
-    state.height_entry.set_width_chars(8)
-    state.height_entry.set_size_request(60, -1)
-    state.height_entry.set_text("100")
-    hbox_crop2.pack_start(state.height_entry, False, False, 5)
-    vbox_crop.pack_start(hbox_crop2, False, False, 2)
-    
-    hbox_crop3 = gtk.HBox(spacing=5)  # Crop options
-    state.create_new_check = gtk.CheckButton("Create new image")
-    state.create_new_check.set_active(False)
-    hbox_crop3.pack_start(state.create_new_check, False, False, 5)
-    state.keep_offsets_check = gtk.CheckButton("Keep lateral offsets")
-    state.keep_offsets_check.set_active(False)
-    hbox_crop3.pack_start(state.keep_offsets_check, False, False, 5)
-    apply_crop_button = gtk.Button("Apply Crop")
-    apply_crop_button.connect("clicked", lambda b: apply_crop(b, state.channel_liststore, state))
-    hbox_crop3.pack_start(apply_crop_button, False, False, 1)
-    vbox_crop.pack_start(hbox_crop3, False, False, 2)
-    
-    separator_vertical = gtk.VSeparator()  # Vertical separator
-    hbox_section2.pack_start(separator_vertical, False, False, 2)
-    
-    # Change Color subsection
+    # Left side: Change Color and Rename Files
+    hbox_color_rename = gtk.HBox(spacing=7)
+    left_vbox.pack_start(hbox_color_rename, False, False, 2)
+
+    # Change Color section
     vbox_color = gtk.VBox(spacing=5)
-    hbox_section2.pack_start(vbox_color, False, False, 2)
+    hbox_color_rename.pack_start(vbox_color, True, True, 5)  # Allow horizontal expansion
     
-    change_color_label = gtk.Label()
-    change_color_label.set_markup("<b>Change Color</b>")
-    change_color_label.set_alignment(0, 0.5)
+    change_color_label = gtk.Label("<b>Change Color</b>")
+    change_color_label.set_use_markup(True)
+    change_color_label.set_alignment(0, 0.5)  # Align to the left
     vbox_color.pack_start(change_color_label, False, False, 2)
     
-    hbox_color1 = gtk.HBox(spacing=5)
-    palette_store = gtk.ListStore(str, gtk.gdk.Pixbuf)  # Store for palette names and previews
+    # Row for Palette ComboBox
+    hbox_palette = gtk.HBox(spacing=5)
+    vbox_color.pack_start(hbox_palette, False, False, 0)  # No vertical expansion
+    
+    palette_store = gtk.ListStore(str, gtk.gdk.Pixbuf)
     for name, pixbuf in get_gradient_names():
         palette_store.append([name, pixbuf])
+    
     state.palette_combobox = gtk.ComboBox(palette_store)
+    state.palette_combobox.set_size_request(-1, -1)  # Automatically resize horizontally
     renderer_text = gtk.CellRendererText()
     state.palette_combobox.pack_start(renderer_text, True)
     state.palette_combobox.add_attribute(renderer_text, "text", 0)
@@ -371,127 +353,254 @@ def create_gui(state):  # Create main plugin GUI
     state.palette_combobox.pack_start(renderer_pixbuf, False)
     state.palette_combobox.add_attribute(renderer_pixbuf, "pixbuf", 1)
     state.palette_combobox.set_active(0)
-    hbox_color1.pack_start(state.palette_combobox, False, False, 5)
-    vbox_color.pack_start(hbox_color1, False, False, 2)
+    hbox_palette.pack_start(state.palette_combobox, True, True, 0)  # Allow ComboBox to expand horizontally
     
-    hbox_color2 = gtk.HBox(spacing=5)
-    apply_palette_button = gtk.Button("Apply Palette")
+    # Row for Apply Palette Button (directly below ComboBox)
+    hbox_apply_palette = gtk.HBox(spacing=5)
+    vbox_color.pack_start(hbox_apply_palette, False, False, 0)
+    
+    apply_palette_button = gtk.Button("Apply Color Gradient")
+    apply_palette_button.set_size_request(-1, -1)  # Automatically resize horizontally
     apply_palette_button.connect("clicked", lambda b: apply_palette(b, state.channel_liststore, state))
-    alignment = gtk.Alignment(xalign=0.5, yalign=0.5)
-    alignment.add(apply_palette_button)
-    hbox_color2.pack_start(alignment, False, False, 5)
-    vbox_color.pack_start(hbox_color2, False, False, 2)
+    hbox_apply_palette.pack_start(apply_palette_button, True, True, 0)  # Allow button to expand horizontally
+
+    # Vertical Separator 
+    vertical_separator = gtk.VSeparator()
+    hbox_color_rename.pack_start(vertical_separator, False, False, 5)  # Fixed position with spacing
+    
+    # Rename Files section
+    vbox_rename = gtk.VBox(spacing=5)
+    hbox_color_rename.pack_start(vbox_rename, True, True, 5)  # Allow horizontal expansion
+    
+    rename_files_label = gtk.Label("<b>Rename Files</b>")
+    rename_files_label.set_use_markup(True)
+    rename_files_label.set_alignment(0, 0.5)  # Align to the left
+    vbox_rename.pack_start(rename_files_label, False, False, 2)
+    
+    # Row for Rename Input
+    hbox_rename_entry = gtk.HBox(spacing=5)
+    vbox_rename.pack_start(hbox_rename_entry, False, False, 0)
+    
+    state.rename_entry = gtk.Entry()
+    rename_placeholder_text = "Insert New name..."
+    
+    # Set the initial placeholder text
+    state.rename_entry.set_text(rename_placeholder_text)
+    state.rename_entry.modify_text(gtk.STATE_NORMAL, gtk.gdk.color_parse("gray"))  # Set placeholder text color to gray
+    
+    # Add focus-in and focus-out events to handle placeholder behavior
+    def on_rename_entry_focus_in(entry, event):
+        if entry.get_text() == rename_placeholder_text:  # Clear placeholder text on focus
+            entry.set_text("")
+            entry.modify_text(gtk.STATE_NORMAL, None)  # Reset text color to default
+    
+    def on_rename_entry_focus_out(entry, event):
+        if entry.get_text().strip() == "":  # Restore placeholder text if empty
+            entry.set_text(rename_placeholder_text)
+            entry.modify_text(gtk.STATE_NORMAL, gtk.gdk.color_parse("gray"))  # Set text color back to gray
+    
+    state.rename_entry.connect("focus-in-event", on_rename_entry_focus_in)
+    state.rename_entry.connect("focus-out-event", on_rename_entry_focus_out)
+    
+    # Add to the GUI
+    hbox_rename_entry.pack_start(state.rename_entry, True, True, 0)  # Allow horizontal resizing
+    
+    # Row for Apply Rename Button
+    hbox_apply_rename = gtk.HBox(spacing=5)
+    vbox_rename.pack_start(hbox_apply_rename, False, False, 0)
+    
+    apply_rename_button = gtk.Button("Apply")
+    apply_rename_button.set_size_request(-1, -1)  # Automatically resize horizontally
+    apply_rename_button.connect("clicked", lambda b: apply_rename(b, state.channel_liststore, state))
+    hbox_apply_rename.pack_start(apply_rename_button, True, True, 0)  # Allow button to expand horizontally
+
 
     separator2 = gtk.HSeparator()
-    vbox.pack_start(separator2, False, False, 5)
+    left_vbox.pack_start(separator2, False, False, 2)
 
-    # Data Process Functionalities section
-    data_process_label = gtk.Label()
-    data_process_label.set_markup("<b>Data Process Functionalities</b>")
-    data_process_label.set_alignment(0, 0.5)
-    vbox.pack_start(data_process_label, False, False, 2)
     
-    vbox_data_process = gtk.VBox(spacing=5)
+
+    #### Crop Data Section with Expander ####
+    crop_data_expander = gtk.Expander()
+    crop_data_expander.set_use_markup(True)  # Enable markup for the label
+    crop_data_expander.set_label("<b>Crop Data</b>")  # Set bold text for the label
+    crop_data_expander.set_expanded(True)  # Start expanded by default
+    left_vbox.pack_start(crop_data_expander, False, False, 0)
+
+    crop_data_vbox = gtk.VBox(spacing=2)
+    crop_data_expander.add(crop_data_vbox)
+    
+    # Row 1: Origin X and Origin Y
+    hbox_crop1 = gtk.HBox(spacing=5)
+    crop_data_vbox.pack_start(hbox_crop1, False, False, 0)
+    
+    label_x = gtk.Label("Origin X (px):")
+    label_x.set_alignment(0, 2)  # Align label to the right
+    label_x.set_size_request(100, -1)  # Add uniform width for labels
+    hbox_crop1.pack_start(label_x, False, False, 0)
+    
+    state.x_entry = gtk.Entry()
+    state.x_entry.set_text("0")
+    hbox_crop1.pack_start(state.x_entry, True, True, 5)  # Expandable input
+    
+    label_y = gtk.Label("Origin Y (px):")
+    label_y.set_alignment(0, 0.5)
+    label_y.set_size_request(100, -1)
+    hbox_crop1.pack_start(label_y, False, False, 5)
+    
+    state.y_entry = gtk.Entry()
+    state.y_entry.set_text("0")
+    hbox_crop1.pack_start(state.y_entry, True, True, 5)  # Expandable input
+    
+    # Row 2: Width and Height
+    hbox_crop2 = gtk.HBox(spacing=5)
+    crop_data_vbox.pack_start(hbox_crop2, False, False, 0)
+    
+    label_width = gtk.Label("Width (px):")
+    label_width.set_alignment(0, 0.5)  # Align label to the right
+    label_width.set_size_request(100, -1)
+    hbox_crop2.pack_start(label_width, False, False, 0)
+    
+    state.width_entry = gtk.Entry()
+    state.width_entry.set_text("100")
+    hbox_crop2.pack_start(state.width_entry, True, True, 5)
+    
+    label_height = gtk.Label("Height (px):")
+    label_height.set_alignment(0, 0.5)
+    label_height.set_size_request(100, -1)
+    hbox_crop2.pack_start(label_height, False, False, 5)
+    
+    state.height_entry = gtk.Entry()
+    state.height_entry.set_text("100")
+    hbox_crop2.pack_start(state.height_entry, True, True, 5)  # Expandable input
+    
+    # Row 3: Checkboxes and Apply Crop Button
+    hbox_crop3 = gtk.HBox(spacing=5)  # Add minimal spacing
+    crop_data_vbox.pack_start(hbox_crop3, False, False, 5)  # No extra vertical space
+    
+    state.create_new_check = gtk.CheckButton("Create new image")
+    state.create_new_check.set_active(False)
+    hbox_crop3.pack_start(state.create_new_check, False, False, 5)
+    
+    state.keep_offsets_check = gtk.CheckButton("Keep lateral offsets")
+    state.keep_offsets_check.set_active(False)
+    hbox_crop3.pack_start(state.keep_offsets_check, False, False, 5)
+    
+    # Apply Crop Button
+    apply_crop_button = gtk.Button("    Apply crop    ")  # Add explicit spaces for button text
+    #apply_crop_button.set_size_request(-1, 30)  # Optional: Set the height of the button
+    apply_crop_button.connect("clicked", lambda b: apply_crop(b, state.channel_liststore, state))
+    hbox_crop3.pack_start(apply_crop_button, False, False, 5)
+
+
+    separator3 = gtk.HSeparator()
+    left_vbox.pack_start(separator3, False, False, 5)
+
+
+        #### Data Process Functionalities Section ####
+    data_process_expander = gtk.Expander()
+    data_process_expander.set_use_markup(True)  # Enable markup
+    data_process_expander.set_label("<b>Data Process Functionalities</b>")  # Bold text
+    data_process_expander.set_expanded(True)  # Start expanded by default
+    left_vbox.pack_start(data_process_expander, True, True, 0)  # Allow the expander to grow vertically
+    
+    data_process_vbox = gtk.VBox(spacing=5)
+    data_process_expander.add(data_process_vbox)
+    
+    # Add spacing below the label
+    spacer = gtk.Label("")  # Empty label acts as a spacer
+    spacer.set_size_request(-1, 5)  # Add 5px height as spacing
+    data_process_vbox.pack_start(spacer, False, False, 0)
+    
+    # Log entry and Load Log File button
     hbox_log = gtk.HBox(spacing=5)
     log_entry = gtk.Entry()
-    log_entry.set_text("Insert the Log file path")
-    log_entry.connect("focus-in-event", lambda w, e: w.set_text("") if w.get_text() == "Insert the Log file path" else None)
-    log_entry.connect("focus-out-event", lambda w, e: w.set_text("Insert the Log file path") if not w.get_text() else None)
+    placeholder_text = "Insert the Log file path..."
+    log_entry.set_text(placeholder_text)
+    log_entry.modify_text(gtk.STATE_NORMAL, gtk.gdk.color_parse("gray"))
+    
+    def on_log_entry_focus_in(entry, event):
+        if entry.get_text() == placeholder_text:
+            entry.set_text("")
+            entry.modify_text(gtk.STATE_NORMAL, None)
+    
+    def on_log_entry_focus_out(entry, event):
+        if entry.get_text().strip() == "":
+            entry.set_text(placeholder_text)
+            entry.modify_text(gtk.STATE_NORMAL, gtk.gdk.color_parse("gray"))
+    
+    log_entry.connect("focus-in-event", on_log_entry_focus_in)
+    log_entry.connect("focus-out-event", on_log_entry_focus_out)
     hbox_log.pack_start(log_entry, True, True, 5)
+    
     load_button = gtk.Button("Load Log File")
     load_button.connect("clicked", lambda b: load_log_file(b, log_entry, state.liststore, state.macro))
     hbox_log.pack_start(load_button, False, False, 1)
-    vbox_data_process.pack_start(hbox_log, False, False, 2)
-    vbox.pack_start(vbox_data_process, False, False, 2)
+    data_process_vbox.pack_start(hbox_log, False, False, 0)
     
-    # Macro table
+    # Macro table inside a ScrolledWindow
     scrolled_macro = gtk.ScrolledWindow()
     scrolled_macro.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
+    
     treeview_macro = gtk.TreeView(state.liststore)
     renderer_text = gtk.CellRendererText()
     treeview_macro.append_column(gtk.TreeViewColumn("#", renderer_text, text=0))
     treeview_macro.append_column(gtk.TreeViewColumn("Function", renderer_text, text=1))
     treeview_macro.append_column(gtk.TreeViewColumn("Parameters", renderer_text, text=2))
+    
     scrolled_macro.add(treeview_macro)
-    scrolled_macro.set_size_request(-1, 100)
-    vbox.pack_start(scrolled_macro, True, True, 2)
+    
+    # Make macro table expand dynamically
+    data_process_vbox.pack_start(scrolled_macro, True, True, 0)  # Allow the macro table to grow vertically
     
     # Replay button
     replay_button = gtk.Button("Replay Selected Channels")
     replay_button.connect("clicked", lambda b: replay_selected_channels(b, state.channel_liststore, state))
-    vbox.pack_start(replay_button, False, False, 1)
     
-    separator4 = gtk.HSeparator()
-    vbox.pack_start(separator4, False, False, 5)
-    
-    # Open SPM Files and Rename Files section
-    hbox_spm_rename = gtk.HBox(spacing=2)
-    vbox.pack_start(hbox_spm_rename, False, False, 2)
+    # Keep the replay button fixed at the bottom
+    data_process_vbox.pack_start(replay_button, False, False, 0)
 
+
+    # Right side: Open SPM Files, Save as .gwy
+    hbox_spm = gtk.HBox(spacing=7)
+    right_vbox.pack_start(hbox_spm, False, False, 2)
+    
     # Open SPM Files subsection
     vbox_spm = gtk.VBox(spacing=5)
-    hbox_spm_rename.pack_start(vbox_spm, False, False, 2)
+    hbox_spm.pack_start(vbox_spm, True, True, 2)
     
     OpenSPM_Files_label = gtk.Label()
-    OpenSPM_Files_label.set_markup("<b>Open SPM Files</b>")
+    OpenSPM_Files_label.set_markup("<b>List of Open SPM Files</b>")
     OpenSPM_Files_label.set_alignment(0, 0.5)
     vbox_spm.pack_start(OpenSPM_Files_label, False, False, 2)
-
+    
+    # Row for Select All, ComboBox, and Save Button (aligned horizontally)
     hbox_select = gtk.HBox(spacing=5)
+    vbox_spm.pack_start(hbox_select, False, False, 0)  # Pack horizontally
+    
+    # Select All Checkbox
     state.select_all_check = gtk.CheckButton("Select All")
     state.select_all_check.set_active(False)
+    state.select_all_check.connect("toggled", sync_select_all_check, state.channel_liststore, state)
+    hbox_select.pack_start(state.select_all_check, False, False, 5)  # Add to horizontal layout
     
-    select_store = gtk.ListStore(str, bool)
-    select_store.append(["Select Options", False])
-    select_store.append(["First Rows", False])
-    select_store.append(["Second Rows", False])
-    select_store.append(["Third Rows", False])
-    select_store.append(["Fourth Rows", False])
-    state.select_dropdown = gtk.ComboBox(select_store)
+    # ComboBox for dropdown
+    temp_store = gtk.ListStore(str, bool, str)
+    state.select_dropdown = gtk.ComboBox(temp_store)
+    state.select_dropdown.set_size_request(350, 25)
     renderer_text = gtk.CellRendererText()
     state.select_dropdown.pack_start(renderer_text, True)
     state.select_dropdown.add_attribute(renderer_text, "text", 0)
     state.select_dropdown.set_active(0)
-    state.select_dropdown.connect("changed", select_dropdown_changed, state.channel_liststore, select_store)
-    state.select_all_check.connect("toggled", sync_select_all_check, state.channel_liststore, select_store)
+    state.select_dropdown.connect("changed", select_dropdown_changed, state.channel_liststore, state)
+    hbox_select.pack_start(state.select_dropdown, True, True, 5)  # Allow ComboBox to expand horizontally
     
-    hbox_select.pack_start(state.select_all_check, False, False, 5)
-    hbox_select.pack_start(state.select_dropdown, False, False, 5)
-    vbox_spm.pack_start(hbox_select, False, False, 2)
-
-    separator5 = gtk.VSeparator()  # Vertical separator
-    hbox_spm_rename.pack_start(separator5, False, False, 2)
-    
-    # Rename Files subsection
-    vbox_rename = gtk.VBox(spacing=5)
-    hbox_spm_rename.pack_start(vbox_rename, False, False, 2)
-    
-    rename_files_label = gtk.Label()
-    rename_files_label.set_markup("<b>Rename Files</b>")
-    rename_files_label.set_alignment(0, 0.5)
-    vbox_rename.pack_start(rename_files_label, False, False, 2)
-    
-    hbox_rename = gtk.HBox(spacing=5)
-    label_base_name = gtk.Label("Base Name:")
-    label_base_name.set_size_request(80, -1)
-    hbox_rename.pack_start(label_base_name, False, False, 5)
-    state.rename_entry = gtk.Entry()
-    state.rename_entry.set_width_chars(15)
-    state.rename_entry.set_size_request(100, -1)
-    state.rename_entry.set_text("")  # Empty by default
-    hbox_rename.pack_start(state.rename_entry, False, False, 5)
-    apply_rename_button = gtk.Button("Apply Rename")
-    apply_rename_button.connect("clicked", lambda b: apply_rename(b, state.channel_liststore, state))
-    hbox_rename.pack_start(apply_rename_button, False, False, 1)
-    vbox_rename.pack_start(hbox_rename, False, False, 2)
-
-    separator6 = gtk.VSeparator()  # Vertical separator for Save as .gwy
-    hbox_spm_rename.pack_start(separator6, False, False, 2)
-
-    # Save as .gwy button
-    save_gwy_button = gtk.Button("Save as .gwy")
+    # Save as .gwy Button (aligned with "Apply crop")
+    save_gwy_button = gtk.Button("Save As .GWY")  # Add spaces to match "Apply crop" size
+    save_gwy_button.set_size_request(-1, 25)  
     save_gwy_button.connect("clicked", lambda b: save_as_gwy(b, state.channel_liststore, state))
-    hbox_spm_rename.pack_start(save_gwy_button, False, False, 2)
+    hbox_select.pack_start(save_gwy_button, False, False, 0)  # Add button to horizontal layout
+
     
     # SPM File and Channel table
     scrolled_channels = gtk.ScrolledWindow()
@@ -514,7 +623,7 @@ def create_gui(state):  # Create main plugin GUI
     treeview_channels.append_column(column_files)
     renderer_delete = gtk.CellRendererText()
     renderer_delete.set_property("xalign", 0.0)
-    column_delete = gtk.TreeViewColumn("Close File", renderer_delete)
+    column_delete = gtk.TreeViewColumn("Close", renderer_delete)
     column_delete.set_cell_data_func(renderer_delete, render_delete_column, treeview_channels)
     treeview_channels.append_column(column_delete)
     treeview_channels.add_events(gtk.gdk.POINTER_MOTION_MASK | gtk.gdk.LEAVE_NOTIFY_MASK)
@@ -522,24 +631,19 @@ def create_gui(state):  # Create main plugin GUI
     treeview_channels.connect("motion-notify-event", lambda t, e: on_treeview_motion(t, e, state.channel_liststore))
     treeview_channels.connect("leave-notify-event", on_treeview_leave)
     scrolled_channels.add(treeview_channels)
-    scrolled_channels.set_size_request(-1, 200)
-    vbox.pack_start(scrolled_channels, True, True, 2)
+    scrolled_channels.set_size_request(300, -1)
+    right_vbox.pack_start(scrolled_channels, True, True, 2)
 
-    populate_data_channels(state.channel_liststore, state)  # Populate channel list
-    check_current_selection(state)  # Initialize selection
-    state.timeout_id = gtk.timeout_add(500, check_current_selection, state)  # Periodic selection check
-    
-    state.last_containers = set(id(c) for c in gwy.gwy_app_data_browser_get_containers())  # Track containers
-    state.data_browser_timeout_id = gtk.timeout_add(1000, check_data_browser_changes, state.channel_liststore, state)  # Periodic data browser check
+    populate_data_channels(state.channel_liststore, state)
+    check_current_selection(state)
+    state.timeout_id = gtk.timeout_add(500, check_current_selection, state)
+    state.last_containers = set(id(c) for c in gwy.gwy_app_data_browser_get_containers())
+    state.data_browser_timeout_id = gtk.timeout_add(1000, check_data_browser_changes, state.channel_liststore, state)
     logger.debug("Started periodic data browser check")
 
-    state.window.set_default_size(600, 600)
+    state.window.set_default_size(700, 600)
     state.window.show_all()
 
-import os
-import gwy
-import gtk
-from datetime import datetime
 
 # Store last selected directory
 LAST_SAVE_DIR = os.path.expanduser("~/Desktop")
@@ -569,9 +673,9 @@ def load_last_dir():
 
 def show_save_confirmation_dialog(save_files, parent):
     """Show a dialog to confirm saving .gwy files."""
-    message = "The following files will be saved:\n\n"
-    for filename, channels, path in save_files:
-        message += "%s: %s -> %s\n" % (filename, ", ".join(channels), path)
+    num_files = len(save_files)
+    save_dir = os.path.dirname(save_files[0][2]) if save_files else ""
+    message = "%d files will be saved under '%s' " % (num_files, save_dir)
     dialog = gtk.MessageDialog(
         parent=parent,
         flags=gtk.DIALOG_MODAL,
@@ -585,7 +689,7 @@ def show_save_confirmation_dialog(save_files, parent):
     logger.info("User %s save as .gwy operation", "confirmed" if response == gtk.RESPONSE_OK else "cancelled")
     return response == gtk.RESPONSE_OK
 
-def get_save_dir(parent):
+def get_save_dir(parent, channel_liststore):
     """Prompt user to select a single save directory for all SPM files."""
     global LAST_SAVE_DIR
     dialog = gtk.FileChooserDialog(
@@ -594,20 +698,33 @@ def get_save_dir(parent):
         action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER,
         buttons=(gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL, gtk.STOCK_OK, gtk.RESPONSE_OK)
     )
-    dialog.set_current_folder(load_last_dir())
+    # Try to get directory from selected SPM files
+    initial_dir = None
+    for row in channel_liststore:
+        if row[5]:  # filename exists
+            file_dir = os.path.dirname(row[5])
+            if os.path.isdir(file_dir) and os.access(file_dir, os.W_OK):
+                initial_dir = file_dir
+                logger.info("Using SPM file directory: %s", initial_dir)
+                break
+    # Fall back to last saved directory if no valid SPM file directory
+    if not initial_dir:
+        initial_dir = load_last_dir()
+        logger.info("No valid SPM file directory, using last directory: %s", initial_dir)
+    dialog.set_current_folder(initial_dir)
     response = dialog.run()
     if response == gtk.RESPONSE_OK:
         save_dir = dialog.get_filename()
         logger.info("User selected save directory: %s", save_dir)
+        if not os.access(save_dir, os.W_OK):
+            logger.warning("No write access to %s, falling back to Desktop", save_dir)
+            save_dir = os.path.expanduser("~/Desktop")
+        LAST_SAVE_DIR = save_dir
+        save_last_dir(save_dir)
     else:
-        save_dir = os.path.expanduser("~/Desktop")
-        logger.info("User cancelled directory selection, using Desktop")
+        save_dir = None
+        logger.info("User cancelled directory selection")
     dialog.destroy()
-    if not os.access(save_dir, os.W_OK):
-        logger.warning("No write access to %s, falling back to Desktop", save_dir)
-        save_dir = os.path.expanduser("~/Desktop")
-    LAST_SAVE_DIR = save_dir
-    save_last_dir(save_dir)
     return save_dir
 
 def ensure_processing_log(container, data_id, filename, log_file="c:\\users\\allani\\appdata\\local\\temp\\SPM_autoprocess.log"):
@@ -694,8 +811,11 @@ def save_as_gwy(button, channel_liststore, state):
         return
 
     # Get single save directory for all files
-    save_dir = get_save_dir(state.window)
-    logger.info("Using save directory for all files: %s", save_dir)
+    save_dir = get_save_dir(state.window, channel_liststore)  # Pass channel_liststore
+    # Check if user cancelled the file chooser
+    if save_dir is None:
+        logger.info("Save as .gwy operation cancelled by user in file chooser")
+        return
 
     # Prepare save paths
     save_files = []
@@ -841,25 +961,6 @@ def delete_file(cell, path, channel_liststore, state):  # Delete SPM file
         except Exception:
             logger.error("Failed to delete SPM file %s", filename)
 
-def remove_file_from_list(cell, path, channel_liststore):  # Remove file from list
-    container = channel_liststore[path][3]
-    filename = channel_liststore[path][5]
-    if container and channel_liststore[path][4] == -1 and not channel_liststore[path][2] and channel_liststore[path][1] != "──────────────────":
-        logger.info("Attempting to remove SPM file from list: %s", filename)
-        try:
-            iter_to_remove = channel_liststore.get_iter(path)
-            while iter_to_remove is not None:
-                if (channel_liststore[iter_to_remove][3] == container or 
-                    channel_liststore[iter_to_remove][1] == "──────────────────"):
-                    next_iter = channel_liststore.iter_next(iter_to_remove)
-                    channel_liststore.remove(iter_to_remove)
-                    iter_to_remove = next_iter
-                else:
-                    break
-            logger.info("Removed SPM file %s from list", filename)
-        except Exception as e:
-            logger.error("Failed to remove SPM file %s from list: %s", filename, str(e))
-
 def create_pixbuf(stock_id, fallback_color):  # Create pixbuf for icons
     try:
         image = gtk.Image()
@@ -873,8 +974,9 @@ def create_pixbuf(stock_id, fallback_color):  # Create pixbuf for icons
     pixbuf.fill(fallback_color)
     return pixbuf
 
-def populate_data_channels(channel_liststore, state):  # Populate channel list
-    checkbox_states = {}  # Store checkbox states
+def populate_data_channels(channel_liststore, state):
+    """Populate channel list and update ComboBox with dynamic channel indices."""
+    checkbox_states = {}
     for row in channel_liststore:
         container, data_id, filename = row[3], row[4], row[5]
         if container and data_id != -1:
@@ -895,10 +997,83 @@ def populate_data_channels(channel_liststore, state):  # Populate channel list
             logger.debug("Error disconnecting selection signal for data_id %d", data_id)
     state.selection_connections = []
 
-    channel_liststore.clear()
-    delete_pixbuf = create_pixbuf(gtk.STOCK_CLOSE, 0xff0000ff)  # Red icon for delete
-    remove_pixbuf = create_pixbuf(gtk.STOCK_REMOVE, 0xffa500ff)  # Orange icon for remove
+    # Calculate max channels and collect channel names
     containers = gwy.gwy_app_data_browser_get_containers()
+    max_channels = 0
+    channel_names_by_index = {}
+    for container in containers:
+        data_ids = gwy.gwy_app_data_browser_get_data_ids(container)
+        max_channels = max(max_channels, len(data_ids))  # Find the maximum number of channels across files
+        for i, data_id in enumerate(data_ids):
+            title = container.get_string_by_name(TITLE_KEY % data_id) or "Data %d" % data_id
+            if i not in channel_names_by_index:
+                channel_names_by_index[i] = set()
+            channel_names_by_index[i].add(title)
+
+    # Update select_store for ComboBox
+    if state.select_store is None:
+        state.select_store = gtk.ListStore(str, bool, str)
+    state.select_store.clear()
+
+    # Add a default placeholder as the first item in the ComboBox
+    state.select_store.append(["Select Options...", False, "Placeholder to guide user"])
+
+    # Add options for all channel groups, up to the maximum across all files
+    for i in range(max_channels):
+        if i == 0:
+            option_label = "First Datachannels"
+        elif i == 1:
+            option_label = "Second Datachannels"
+        elif i == 2:
+            option_label = "Third Datachannels"
+        elif i == 3:
+            option_label = "Fourth Datachannels"
+        elif i == 4:
+            option_label = "Fifth Datachannels"
+        elif i == 5:
+            option_label = "Sixth Datachannels"
+        elif i == 6:
+            option_label = "Seventh Datachannels"
+        elif i == 7:
+            option_label = "Eighth Datachannels"
+        else:
+            # For options beyond the eighth, use a numeric ordinal format
+            suffix = "th"
+            if (i + 1) % 10 == 1 and (i + 1) != 11:
+                suffix = "st"
+            elif (i + 1) % 10 == 2 and (i + 1) != 12:
+                suffix = "nd"
+            elif (i + 1) % 10 == 3 and (i + 1) != 13:
+                suffix = "rd"
+            option_label = "{}{} Datachannels".format(i + 1, suffix)
+
+        # Collect the names of channels at this index (if they exist)
+        names = ", ".join(sorted(channel_names_by_index.get(i, {"Unknown"})))
+        tooltip_text = "Select channels: {}".format(names)
+
+        # Append the option to the ComboBox store
+        state.select_store.append([option_label, False, tooltip_text])
+
+    # Set ComboBox model
+    state.select_dropdown.set_model(state.select_store)
+
+    # Set the default placeholder as the active item
+    state.select_dropdown.set_active(0)
+
+    # Set tooltips on ComboBox
+    state.select_dropdown.set_has_tooltip(True)
+    def query_tooltip(combo, x, y, keyboard_mode, tooltip):
+        if combo.get_active_iter():
+            tooltip_text = combo.get_model()[combo.get_active()][2]
+            tooltip.set_text(tooltip_text)
+            return True
+        return False
+    state.select_dropdown.connect("query-tooltip", query_tooltip)
+
+    # Populate channel list
+    channel_liststore.clear()
+    delete_pixbuf = create_pixbuf(gtk.STOCK_CLOSE, 0xff0000ff)
+    remove_pixbuf = create_pixbuf(gtk.STOCK_REMOVE, 0xffa500ff)
     for idx, container in enumerate(containers, 1):
         filename = container.get_string_by_name(FILENAME_KEY) or "Container %d" % id(container)
         filename = os.path.basename(filename) if filename else "Unknown SPM File"
@@ -920,7 +1095,8 @@ def populate_data_channels(channel_liststore, state):  # Populate channel list
                     except Exception as e:
                         logger.error("Failed to connect selection signal for data_id %d: %s", data_id, str(e))
         channel_liststore.append([False, "──────────────────", False, None, -1, "", None, None])
-    logger.info("Populated %d data channels from %d SPM files", sum(len(gwy.gwy_app_data_browser_get_data_ids(c)) for c in containers), len(containers))
+    logger.info("Populated %d data channels from %d SPM files, max channels: %d", sum(len(gwy.gwy_app_data_browser_get_data_ids(c)) for c in containers), len(containers), max_channels)
+
 
 # Selection handling
 def get_selection_params(container, data_id):  # Get crop parameters from selection
@@ -1167,28 +1343,28 @@ def apply_palette(button, channel_liststore, state):  # Apply selected palette
 
 def apply_fixed_color_range(button, channel_liststore, state):  # Apply fixed color range
     try:
-        min_val = float(state.min_entry.get_text().strip())
-        max_val = float(state.max_entry.get_text().strip())
-        if min_val >= max_val:
-            show_message_dialog(gtk.MESSAGE_ERROR, "Invalid range: Minimum value must be less than maximum value.You Can Invert Mapping instead")
-            return
-        user_provided = True
+        # Attempt to parse the "Start" and "End" inputs as floating-point numbers
+        start_val = float(state.min_entry.get_text().strip())  # Renamed from min_val to start_val
+        end_val = float(state.max_entry.get_text().strip())    # Renamed from max_val to end_val
     except ValueError:
-        user_provided = False
-    
+        # Show an error message if the input isn't a valid number
+        show_message_dialog(gtk.MESSAGE_ERROR, "Invalid input: Please enter valid numeric values for Start and End.")
+        return
+
     def operation(container, data_id, title, filename):
         if data_id == -1:
             raise ValueError("Invalid channel")
-        min_val_local, max_val_local = (min_val, max_val) if user_provided else get_min_max(container, data_id)
-        if min_val_local is None or max_val_local is None:
-            raise ValueError("No valid min/max")
+        
+        # Apply the Start and End values as provided, even if Start > End (allow inversion)
         container.set_int32_by_name(RANGE_TYPE_KEY % data_id, gwy.LAYER_BASIC_RANGE_FIXED)
-        container.set_double_by_name(BASE_MIN_KEY % data_id, min_val_local)
-        container.set_double_by_name(BASE_MAX_KEY % data_id, max_val_local)
+        container.set_double_by_name(BASE_MIN_KEY % data_id, start_val)
+        container.set_double_by_name(BASE_MAX_KEY % data_id, end_val)
         gwy.gwy_app_data_browser_select_data_field(container, data_id)
-    
+        logger.info("Applied fixed color range: Start=%f, End=%f on data_id=%d in %s", start_val, end_val, data_id, filename)
+
     process_selected_channels(channel_liststore, operation, "No channels selected for color range",
                              "Fixed color range applied to %d channels", state)
+
 
 def set_to_full_range(button, channel_liststore, state):  # Set to full range
     def operation(container, data_id, title, filename):
@@ -1491,7 +1667,7 @@ def get_gradient_names():  # Retrieve Gwyddion gradients
         pass
     return [('Gwyddion.net', None), ('Green', None), ('Blue', None)]
 
-def render_channel_column(column, cell, model, iter, treeview):  # Render Select column
+def render_channel_column(column, cell, model, iter, treeview):
     is_selectable = model.get_value(iter, 2)
     is_file_row = not is_selectable and model.get_value(iter, 4) == -1 and model.get_value(iter, 1) != "──────────────────"
     path = model.get_path(iter)
@@ -1501,19 +1677,13 @@ def render_channel_column(column, cell, model, iter, treeview):  # Render Select
         if isinstance(cell, gtk.CellRendererToggle):
             cell.set_property("visible", True)
             cell.set_property("active", model.get_value(iter, 0))
+            cell.set_property("activatable", True)
         elif isinstance(cell, gtk.CellRendererText):
             cell.set_property("visible", False)
-    elif is_file_row:
-        if isinstance(cell, gtk.CellRendererToggle):
-            cell.set_property("visible", False)
-        elif isinstance(cell, gtk.CellRendererText):
-            cell.set_property("visible", True)
-            cell.set_property("text", "–")
-            cell.set_property("foreground", "red" if select_hover_path == path else "black")
-            cell.set_property("underline", pango.UNDERLINE_SINGLE if select_hover_path == path else pango.UNDERLINE_NONE)
     else:
         if isinstance(cell, gtk.CellRendererToggle):
             cell.set_property("visible", False)
+            cell.set_property("activatable", False)
         elif isinstance(cell, gtk.CellRendererText):
             cell.set_property("visible", False)
 
@@ -1526,31 +1696,21 @@ def render_delete_column(column, cell, model, iter, treeview):  # Render Close F
         cell.set_property("visible", True)
         cell.set_property("text", "X")
         cell.set_property("weight", pango.WEIGHT_BOLD)
-        cell.set_property("foreground", "blue" if close_hover_path == path else "black")
+        cell.set_property("foreground", "red" if close_hover_path == path else "black")
     else:
         cell.set_property("visible", False)
 
-def render_remove_column(column, cell, model, iter):  # Render remove button
-    is_file_row = not model.get_value(iter, 2) and model.get_value(iter, 4) == -1 and model.get_value(iter, 1) != "──────────────────"
-    cell.set_property("visible", is_file_row)
-    if is_file_row:
-        pixbuf = model.get_value(iter, 7)
-        if pixbuf and isinstance(pixbuf, gtk.gdk.Pixbuf):
-            cell.set_property("pixbuf", pixbuf)
-
-def on_treeview_button_press(treeview, event, channel_liststore, state):  # Handle TreeView clicks
+def on_treeview_button_press(treeview, event, channel_liststore, state):
     if event.button == 1:
         pos = treeview.get_path_at_pos(int(event.x), int(event.y))
         if pos:
             path, column, cell_x, cell_y = pos
-            if column == treeview.get_column(0):
-                if channel_liststore[path][2]:
+            if column == treeview.get_column(0):  # Select column
+                if channel_liststore[path][2]:  # Channel row
                     toggle_channel_selection(None, path, channel_liststore)
                     return True
-                elif not channel_liststore[path][2] and channel_liststore[path][4] == -1 and channel_liststore[path][1] != "──────────────────":
-                    remove_file_from_list(None, path, channel_liststore)
-                    return True
-            elif channel_liststore[path][2]:
+                return False  # Ignore clicks on file rows in Select column
+            elif channel_liststore[path][2]:  # Channel row
                 container, data_id = channel_liststore[path][3], channel_liststore[path][4]
                 if data_id != -1:
                     gwy.gwy_app_data_browser_select_data_field(container, data_id)
@@ -1600,15 +1760,14 @@ def on_treeview_leave(treeview, event):  # Clear hover states on mouse leave
         treeview.queue_draw()
     return True
 
-def select_dropdown_changed(combo, channel_liststore, select_store):  # Handle dropdown selection
+def select_dropdown_changed(combo, channel_liststore, state):
+    """Handle dropdown selection for dynamic channel indices."""
     active = combo.get_active()
-    if active == 0:
+    if active == 0:  # "Select Options" selected
         return
-    
-    row_index = active - 1
-    new_state = not select_store[active][1]
-    select_store[active][1] = new_state
-    
+    row_index = active - 1  # Map to 0-based channel index
+    new_state = not state.select_store[active][1]
+    state.select_store[active][1] = new_state
     current_file_container = None
     current_row_index = -1
     for row in channel_liststore:
@@ -1620,33 +1779,27 @@ def select_dropdown_changed(combo, channel_liststore, select_store):  # Handle d
             current_row_index += 1
             if current_row_index == row_index and row[2]:
                 row[0] = new_state
-                logger.debug("%s row %d for file %s", "Selected" if new_state else "Deselected", row_index + 1, row[5])
-    
+                logger.debug("%s Channel %d for file %s", "Selected" if new_state else "Deselected", row_index + 1, row[5])
     combo.set_active(0)
 
-def sync_select_all_check(checkbutton, channel_liststore, select_store):  # Sync Select All checkbox
-    select_all_state = checkbutton.get_active()
-    
-    for i, row in enumerate(select_store):
-        if i == 0:
-            continue
-        row[1] = select_all_state
-    
+def sync_select_all_check(checkbutton, channel_liststore, state):
+    """Toggle all channel checkboxes based on Select All state."""
+    active = checkbutton.get_active()
     for row in channel_liststore:
-        if row[2]:
-            row[0] = select_all_state
-    
-    logger.debug("%s all channels and dropdown states", "Selected" if select_all_state else "Deselected")
+        if row[2]:  # Only update actual channels, not file headers or separators
+            row[0] = active
+            logger.debug("%s channel %s for file %s", "Selected" if active else "Deselected", row[1], row[5])
+    logger.debug("Select All %s", "enabled" if active else "disabled")
+
 
 #plugin entry point
-def run(data, mode):  # Main plugin entry point
-    global _gui_close_signal
-    # Check for existing GUI in Gwyddion's data browser
+def run(data, mode):
+    """Main plugin entry point."""
+    global _plugin_gui_instance
     container = gwy.gwy_app_data_browser_get_containers()[0]
     gui_key = "/module/autoprocess/gui_open"
     if container.contains_by_name(gui_key) and container.get_boolean_by_name(gui_key):
         logger.debug("GUI already open, showing message dialog and emitting close signal")
-        # Show message dialog
         dialog = gtk.MessageDialog(
             parent=None,
             flags=gtk.DIALOG_MODAL,
@@ -1656,18 +1809,14 @@ def run(data, mode):  # Main plugin entry point
         )
         dialog.run()
         dialog.destroy()
-        if _gui_close_signal is not None:
-            gobject.signal_emit(_gui_close_signal, "close-gui")
-        return  # Exit without creating new GUI
+        if _plugin_gui_instance is not None:
+            _plugin_gui_instance.emit("close-gui")
+        return
 
     state = PluginState()
     key = gwy.gwy_app_data_browser_get_current(gwy.APP_DATA_FIELD_KEY)
-    gwy.gwy_app_undo_qcheckpoint(data, [key])  # Create undo checkpoint
-    create_gui(state)  # Initialize GUI
-    # Set GUI open flag
+    gwy.gwy_app_undo_qcheckpoint(data, [key])
+    create_gui(state)
     container.set_boolean_by_name(gui_key, True)
     logger.debug("Set GUI open flag in container")
-    # Register close signal
-    if _gui_close_signal is None:
-        _gui_close_signal = gobject.signal_new("close-gui", gtk.Window, gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ())
     state.window.connect("close-gui", lambda w: on_window_delete_event(w, None, state))
