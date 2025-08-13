@@ -336,10 +336,13 @@ if not gobject.signal_lookup("close-gui", gtk.Window):
 # --------------------------------
 def create_gui(state):
     """Instantiate the main plugin window and build the complete UI."""
-    global _plugin_gui_instance
-    if _plugin_gui_instance is not None:
-        logger.debug("GUI already open, closing existing window")
-        on_window_delete_event(_plugin_gui_instance, None, state)
+    # If an instance already exists (defensive), present and return.
+    existing = _find_autoprocess_window()
+    if existing is not None:
+        try:
+            existing.present()
+        except Exception:
+            pass
         return
 
     # Window
@@ -350,7 +353,7 @@ def create_gui(state):
     state.window.connect("delete-event",
                          lambda w, e: on_window_delete_event(w, e, state))
     logger.debug("Created main window")
-    _plugin_gui_instance = state.window
+    state.window.set_data("autoprocess_singleton", True)
 
     # Root layout
     main_hbox = gtk.HBox(spacing=5)
@@ -1030,51 +1033,59 @@ def save_as_gwy(button, channel_liststore, state):
 # Window Close / Cleanup
 # --------------------------------
 def on_window_delete_event(widget, event, state):
-    """Tear down timeouts/signals, reset flags, and destroy the window."""
-    container = gwy.gwy_app_data_browser_get_containers()[0]
-    gui_key = "/module/autoprocess/gui_open"
-    if container.contains_by_name(gui_key):
-        container.set_boolean_by_name(gui_key, False)
-        logger.debug("Cleared GUI open flag in container")
+    """Cleanup timers, signals, and release the global singleton when closing."""
+    global _plugin_gui_instance
 
-    if state.timeout_id is not None:
-        gobject.source_remove(state.timeout_id)
+    # Stop periodic timers
+    if getattr(state, 'timeout_id', None) is not None:
+        try:
+            gobject.source_remove(state.timeout_id)
+        except Exception:
+            pass
         state.timeout_id = None
-        logger.debug("Removed selection timeout handler")
 
-    if hasattr(state, 'data_browser_timeout_id') and state.data_browser_timeout_id is not None:
-        gobject.source_remove(state.data_browser_timeout_id)
+    if getattr(state, 'data_browser_timeout_id', None) is not None:
+        try:
+            gobject.source_remove(state.data_browser_timeout_id)
+        except Exception:
+            pass
         state.data_browser_timeout_id = None
-        logger.debug("Removed data browser timeout handler")
 
-    for conn_id, container, data_id in state.selection_connections:
+    # Disconnect selection signals
+    for conn_id, container, data_id in list(getattr(state, 'selection_connections', [])):
         try:
             for key in [SELECTION_KEYS[0] % data_id, SELECTION_KEYS[1] % data_id]:
                 if container and container.contains_by_name(key):
                     selection = container.get_object_by_name(key)
                     selection.disconnect(conn_id)
-        except:
+        except Exception:
             pass
-
     state.selection_connections = []
-    state.last_crop_operation = []
+    # Clear current references
     state.current_container = None
     state.current_data_id = None
 
-    # Reset log handlers to console
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter("%(asctime)s,%(msecs)03d: %(message)s",
-                                                   datefmt='%Y-%m-%d %H:%M:%S'))
-    logger.addHandler(console_handler)
-    for handler in logger.handlers[:]:
-        if handler != console_handler:
-            logger.removeHandler(handler)
-    logger.removeHandler(console_handler)
-
-    state.window.destroy()
+    # Optional: logger handler tidy-up (matches your existing behavior)
+    try:
+        if state.window is not None:
+            try:
+                state.window.set_data("autoprocess_singleton", None)
+            except Exception:
+                pass
+            state.window.destroy()
+    except Exception:
+        pass
     state.window = None
-    logger.debug("GUI instance closed and cleared")
-    return True
+
+    # Optional: also clear your module-global, if you keep one
+    try:
+        global _plugin_gui_instance
+        _plugin_gui_instance = None
+    except Exception:
+        pass
+
+    return True  
+
 
 
 # --------------------------------
@@ -2072,40 +2083,53 @@ def sync_select_all_check(checkbutton, channel_liststore, state):
             logger.debug("%s channel %s for file %s", "Selected" if active else "Deselected", row[1], row[5])
     logger.debug("Select All %s", "enabled" if active else "disabled")
 
+def _find_autoprocess_window():
+    """Return the existing AutoProcess window if it's already open, else None."""
+    try:
+        # PyGTK 2.x: list all toplevel GTK windows
+        for w in gtk.window_list_toplevels():
+            try:
+                if isinstance(w, gtk.Window) and w.get_data("autoprocess_singleton") is True:
+                    return w
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
 
 # ---------- Entry point required by Gwyddion ----------
 def run(data, mode):
     """
-    Gwyddion callback: invoked when plugin is launched from the menu.
-    Enforces single-window policy and sets a 'gui_open' flag in container.
+    Gwyddion entry point. Enforce a strict single AutoProcess window:
+    if one exists, present it; otherwise create a fresh one.
     """
-    global _plugin_gui_instance
-
-    container = gwy.gwy_app_data_browser_get_containers()[0]
-    gui_key = "/module/autoprocess/gui_open"
-
-    if container.contains_by_name(gui_key) and container.get_boolean_by_name(gui_key):
-        logger.debug("GUI already open; notify user and emit close signal")
+    # 1) If a window already exists, bring it to front and bail.
+    existing = _find_autoprocess_window()
+    if existing is not None:
+        try:
+            if hasattr(existing, "present"):
+                existing.present()
+        except Exception:
+            pass
         dlg = gtk.MessageDialog(
-            parent=None, flags=gtk.DIALOG_MODAL, type=gtk.MESSAGE_INFO,
-            buttons=gtk.BUTTONS_OK, message_format="AutoProcess GUI is already open."
+            parent=None,
+            flags=gtk.DIALOG_MODAL,
+            type=gtk.MESSAGE_INFO,
+            buttons=gtk.BUTTONS_OK,
+            message_format="AutoProcess GUI is already open."
         )
         dlg.run()
         dlg.destroy()
-        if _plugin_gui_instance is not None:
-            _plugin_gui_instance.emit("close-gui")
         return
 
+    # 2) Otherwise create a new GUI
     state = PluginState()
+    try:
+        key = gwy.gwy_app_data_browser_get_current(gwy.APP_DATA_FIELD_KEY)
+        gwy.gwy_app_undo_qcheckpoint(data, [key])
+    except Exception:
+        pass
 
-    # Establish an undo checkpoint on current data (matches original behavior)
-    key = gwy.gwy_app_data_browser_get_current(gwy.APP_DATA_FIELD_KEY)
-    gwy.gwy_app_undo_qcheckpoint(data, [key])
-
-    # Build GUI and set open flag
     create_gui(state)
-    container.set_boolean_by_name(gui_key, True)
-    logger.debug("Set GUI open flag in container")
 
-    # Allow external close via signal
-    state.window.connect("close-gui", lambda w: on_window_delete_event(w, None, state))
