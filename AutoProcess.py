@@ -2041,7 +2041,6 @@ def on_treeview_motion(treeview, event, channel_liststore):
         treeview.queue_draw()
     return True
 
-
 def on_treeview_leave(treeview, event):
     """Clear hover visuals when cursor leaves the treeview area."""
     old_select_hover_path = treeview.get_data("select_hover_path")
