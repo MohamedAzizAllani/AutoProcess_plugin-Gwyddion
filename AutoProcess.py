@@ -15,7 +15,7 @@ Batch toolbox for SPM data in Gwyddion:
 """
 # ---------- Plugin metadata required by Gwyddion ----------
 
-plugin_menu = "/AutoProcess"       # Where the plugin appears in Gwyddion's menu
+plugin_menu = "/AutoProcesss"       # Where the plugin appears in Gwyddion's menu
 plugin_desc = ("Replays processing tools, sets color palettes, applies fixed "
                "color ranges, inverts mapping, sets zero to minimum, "
                "deletes/removes files, and automates cropping.")
@@ -139,6 +139,7 @@ class PluginState(object):
         self.current_container = None
         self.current_data_id = None
         self.last_containers = None
+        self.current_data_view = None
 
 
 # Keep a single open GUI instance (avoid duplicates)
@@ -358,6 +359,7 @@ def create_gui(state):
     # Root layout
     main_hbox = gtk.HBox(spacing=5)
     state.window.add(main_hbox)
+
 
     left_vbox = gtk.VBox(spacing=5)
     right_vbox = gtk.VBox(spacing=5)
@@ -1347,96 +1349,88 @@ def selection_changed(selection, index, container, data_id, state, *args):
 
 
 def check_current_selection(state):
-    """Periodic task: track active container/data_id; attach a rectangle layer.
-
-    Also synchronizes crop entry fields with the current selection.
-    """
     if not gwy.gwy_app_data_browser_get_containers():
         return True
 
     current_container = gwy.gwy_app_data_browser_get_current(gwy.APP_CONTAINER)
-    current_data_id = (gwy.gwy_app_data_browser_get_current(gwy.APP_DATA_FIELD_ID)
-                       if current_container else None)
+    current_data_id   = gwy.gwy_app_data_browser_get_current(gwy.APP_DATA_FIELD_ID)
+    if not current_container or current_data_id is None:
+        return True
 
-    if (current_container, current_data_id) != (state.current_container, state.current_data_id):
-        # Disconnect old signals
-        for conn_id, container, data_id in state.selection_connections:
-            try:
-                for key in [SELECTION_KEYS[0] % data_id, SELECTION_KEYS[1] % data_id]:
-                    if container.contains_by_name(key):
-                        selection = container.get_object_by_name(key)
-                        selection.disconnect(conn_id)
-            except:
-                pass
-        state.selection_connections = []
+    data_view = gwy.gwy_app_data_browser_get_current(gwy.APP_DATA_VIEW)
+    if not data_view:
+        return True
 
-        state.current_container, state.current_data_id = current_container, current_data_id
-        if current_container and current_data_id is not None:
-            data_view = gwy.gwy_app_data_browser_get_current(gwy.APP_DATA_VIEW)
-            if not data_view or not isinstance(data_view, gobject.GObject):
-                return True
+    
+    view_changed = (data_view != getattr(state, "current_data_view", None))
+    channel_changed = (
+        current_container != state.current_container or
+        current_data_id != state.current_data_id
+    )
 
-            layer = gobject.new(gobject.type_from_name('GwyLayerRectangle'))
-            selection_key = SELECTION_KEYS[0] % current_data_id
-            layer.set_selection_key(selection_key)
-            layer.set_property("is-crop", True)
-            data_view.set_top_layer(layer)
+    if not view_changed and not channel_changed:
+        x, y, w, h = get_selection_params(current_container, current_data_id)
+        if x is not None and w > 0 and h > 0:
+            state.x_entry.set_text(str(x))
+            state.y_entry.set_text(str(y))
+            state.width_entry.set_text(str(w))
+            state.height_entry.set_text(str(h))
+        return True
 
-            for key in ["/%d/select/pointer" % current_data_id,
-                        "/%d/select/line" % current_data_id]:
-                if current_container.contains_by_name(key):
-                    current_container.remove_by_name(key)
 
-            if not current_container.contains_by_name(selection_key):
-                selection = gobject.new(gobject.type_from_name('GwySelectionRectangle'))
-                selection.set_max_objects(1)
-                current_container.set_object_by_name(selection_key, selection)
+    logger.debug("Crop layer reattach triggered (view_changed=%s, channel_changed=%s)",
+                 view_changed, channel_changed)
 
-            data_field = current_container.get_object_by_name(DATA_KEY % current_data_id)
-            dx, dy = data_field.get_dx(), data_field.get_dy()
-            xres, yres = data_field.get_xres(), data_field.get_yres()
-            default_width = min(0, xres // 2)
-            default_height = min(0, yres // 2)
-            default_coords = [0.0, 0.0, default_width * dx, default_height * dy]
-            selection = current_container.get_object_by_name(selection_key)
-            selection.set_object(0, default_coords)
-            selection.crop(0.0, 0.0, xres * dx, yres * dy)
+    state.current_container = current_container
+    state.current_data_id   = current_data_id
+    state.current_data_view = data_view  
 
-            try:
-                conn_id = selection.connect("changed", selection_changed,
-                                            current_container, current_data_id, state)
-                state.selection_connections.append((conn_id, current_container, current_data_id))
-            except Exception as e:
-                pass
+    selection_key = "/%d/select/rectangle" % current_data_id
 
-            x, y, width, height = get_selection_params(current_container, current_data_id)
-            if all(v is not None for v in (x, y, width, height)):
-                state.x_entry.set_text(str(x))
-                state.y_entry.set_text(str(y))
-                state.width_entry.set_text(str(width))
-                state.height_entry.set_text(str(height))
-            else:
-                state.x_entry.set_text("")
-                state.y_entry.set_text("")
-                state.width_entry.set_text("")
-                state.height_entry.set_text("")
+    if not current_container.contains_by_name(selection_key):
+        selection = gobject.new(gobject.type_from_name('GwySelectionRectangle'))
+        selection.set_max_objects(1)
+        current_container.set_object_by_name(selection_key, selection)
+
+    selection = current_container.get_object_by_name(selection_key)
+
+    # Clean old connections
+    for conn_id, cont, did in state.selection_connections[:]:
+        if cont == current_container and did == current_data_id:
+            try: selection.disconnect(conn_id)
+            except: pass
+            state.selection_connections.remove((conn_id, cont, did))
+
+    # Reattach layer
+    layer = gobject.new(gobject.type_from_name('GwyLayerRectangle'))
+    layer.set_selection_key(selection_key)
+    layer.set_property("is-crop", True)
+    data_view.set_top_layer(layer)
+
+    # Clean other selections
+    for key in ["/%d/select/pointer" % current_data_id,
+                "/%d/select/line" % current_data_id]:
+        if current_container.contains_by_name(key):
+            current_container.remove_by_name(key)
+
+    # Connect signal
+    conn_id = selection.connect("changed", selection_changed,
+                                current_container, current_data_id, state)
+    state.selection_connections.append((conn_id, current_container, current_data_id))
+
+    # Update fields
+    x, y, w, h = get_selection_params(current_container, current_data_id)
+    if x is not None and w > 0 and h > 0:
+        state.x_entry.set_text(str(x))
+        state.y_entry.set_text(str(y))
+        state.width_entry.set_text(str(w))
+        state.height_entry.set_text(str(h))
     else:
-        if current_container and current_data_id is not None:
-            x, y, width, height = get_selection_params(current_container, current_data_id)
-            if all(v is not None for v in (x, y, width, height)):
-                if (state.x_entry.get_text().strip() != str(x) or
-                    state.y_entry.get_text().strip() != str(y) or
-                    state.width_entry.get_text().strip() != str(width) or
-                    state.height_entry.get_text().strip() != str(height)):
-                    state.x_entry.set_text(str(x))
-                    state.y_entry.set_text(str(y))
-                    state.width_entry.set_text(str(width))
-                    state.height_entry.set_text(str(height))
-            else:
-                state.x_entry.set_text("")
-                state.y_entry.set_text("")
-                state.width_entry.set_text("")
-                state.height_entry.set_text("")
+        state.x_entry.set_text("0")
+        state.y_entry.set_text("0")
+        state.width_entry.set_text("0")
+        state.height_entry.set_text("0")
+
     return True
 
 
@@ -2131,4 +2125,3 @@ def run(data, mode):
         pass
 
     create_gui(state)
-
