@@ -2091,7 +2091,7 @@ def _find_autoprocess_window():
     return None
 
 
-# ---------- Entry point required by Gwyddion -------------
+# ---------- Entry point required by Gwyddion ----------------
 def run(data, mode):
     """
     Gwyddion entry point. Enforce a strict single AutoProcess window:
