@@ -1,6 +1,6 @@
 # AutoProcess – Gwyddion Python Plugin
 
-Batch processing toolbox for SPM/AFM data.
+Batch processing plugin for SPM data.
 
  ### Screenshot
 <img src="https://github.com/user-attachments/assets/baf0cec1-ff62-4096-82e6-f244d9f6dad2" width="400"/>
