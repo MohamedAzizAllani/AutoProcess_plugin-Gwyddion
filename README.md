@@ -3,7 +3,7 @@
 Fast batch toolbox for SPM data processing inside Gwyddion (Python 2.7 / pygwy).
 
 ### Screenshot
-         ![AutoProcess GUI](https://github.com/user-attachments/assets/baf0cec1-ff62-4096-82e6-f244d9f6dad2)
+ ![AutoProcess GUI](https://github.com/user-attachments/assets/baf0cec1-ff62-4096-82e6-f244d9f6dad2)
 
 ### Features
 - Fixed or full color range, invert mapping, zero-to-min (reversible)
