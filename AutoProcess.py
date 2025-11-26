@@ -685,11 +685,17 @@ def create_gui(state):
                                   state.channel_liststore, state)
     hbox_select.pack_start(state.select_dropdown, True, True, 5)
 
+    # Existing "Save As .GWY" (one file per SPM)
     save_gwy_button = gtk.Button("Save As .GWY")
     save_gwy_button.set_size_request(-1, 25)
-    save_gwy_button.connect("clicked",
-                            lambda b: save_as_gwy(b, state.channel_liststore, state))
-    hbox_select.pack_start(save_gwy_button, False, False, 0)
+    save_gwy_button.connect("clicked", lambda b: save_as_gwy(b, state.channel_liststore, state))
+    hbox_select.pack_start(save_gwy_button, False, False, 5)
+
+    # NEW: Save all selected channels into ONE merged .gwy
+    save_merged_button = gtk.Button("Save Merged")
+    save_merged_button.set_size_request(-1, 25)
+    save_merged_button.connect("clicked", lambda b: save_selected_as_single_gwy(b, state.channel_liststore, state))
+    hbox_select.pack_start(save_merged_button, False, False, 0)
 
     # File + channel table
     scrolled_channels = gtk.ScrolledWindow()
@@ -903,19 +909,112 @@ def ensure_color_range(container, data_id, filename):
                        data_id, filename, str(e))
 
 
+def save_selected_as_single_gwy(button, channel_liststore, state):
+    """Merge any selected channels → ONE perfect .gwy (full metadata, logs, calibration)"""
+    selected = []
+    for row in channel_liststore:
+        checked, title, is_channel, container, data_id, filename, _, _ = row
+        if checked and container and is_channel and data_id != -1:
+            selected.append((container, data_id, title, os.path.basename(filename or "Unknown")))
+
+    if not selected:
+        show_message_dialog(gtk.MESSAGE_ERROR, "No channels selected.")
+        return
+
+    # File dialog
+    dialog = gtk.FileChooserDialog("Save Merged Channels As One .gwy", state.window,
+                                   gtk.FILE_CHOOSER_ACTION_SAVE,
+                                   (gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL,
+                                    gtk.STOCK_SAVE, gtk.RESPONSE_OK))
+    dialog.set_do_overwrite_confirmation(True)
+    dialog.set_current_folder(load_last_dir())
+    dialog.set_current_name("Merged_Channels.gwy")
+    if dialog.run() != gtk.RESPONSE_OK:
+        dialog.destroy()
+        return
+    save_path = dialog.get_filename()
+    dialog.destroy()
+    if not save_path.lower().endswith(".gwy"):
+        save_path += ".gwy"
+
+    new_container = gwy.Container()
+    new_id = 0
+
+    for container, data_id, title, orig_filename in selected:
+        try:
+            old_prefix = "/%d/" % data_id
+            new_prefix = "/%d/" % new_id
+
+            # Gwyddion 2.x: get all string keys
+            all_keys = container.keys_by_name()
+
+            for key in all_keys:
+                if not key.startswith(old_prefix):
+                    continue
+
+                # Build new key
+                new_key = new_prefix + key[len(old_prefix):]
+
+                # Copy based on actual type (safe for Gwyddion 2.69)
+                if container.contains_by_name(key):
+                    # Try object first (meta, data, calibration, etc.)
+                    if hasattr(container, 'get_object_by_name'):
+                        obj = container.get_object_by_name(key)
+                        if obj is not None:
+                            new_container.set_object_by_name(new_key, obj.duplicate())
+                            continue
+
+                    # Then string
+                    if container.get_string_by_name(key) is not None:
+                        new_container.set_string_by_name(new_key, container.get_string_by_name(key))
+                    # Then double
+                    elif container.get_double_by_name(key) is not None:
+                        new_container.set_double_by_name(new_key, container.get_double_by_name(key))
+                    # Then int32
+                    elif container.get_int32_by_name(key) is not None:
+                        new_container.set_int32_by_name(new_key, container.get_int32_by_name(key))
+                    # Then int64 (rare)
+                    elif hasattr(container, 'get_int64_by_name') and container.get_int64_by_name(key) is not None:
+                        new_container.set_int64_by_name(new_key, container.get_int64_by_name(key))
+
+            # Force title with origin
+            orig_title = container.get_string_by_name("/%d/data/title" % data_id) or title
+            new_container.set_string_by_name("/%d/data/title" % new_id,
+                                             "%s [%s]" % (orig_title, orig_filename))
+
+            logger.info("Merged channel %d → %d: %s [%s]" % (data_id, new_id, orig_title, orig_filename))
+            new_id += 1
+
+        except Exception as e:
+            logger.error("Failed merging channel %d: %s" % (data_id, str(e)))
+
+    if new_id == 0:
+        show_message_dialog(gtk.MESSAGE_ERROR, "No channels merged.")
+        return
+
+    # Save exactly like your working "Save As .GWY" function
+    success = gwy.gwy_file_save(new_container, save_path, gwy.RUN_NONINTERACTIVE)
+    if not success:
+        success = gwy.gwy_file_func_run_save("gwyddion", new_container, save_path, gwy.RUN_NONINTERACTIVE)
+
+    import gc; gc.collect()
+
+    if success and os.path.exists(save_path) and os.path.getsize(save_path) > 200000:
+        show_message_dialog(gtk.MESSAGE_INFO,
+                            "PERFECT MERGE!\n%d channels saved with full metadata & logs:\n%s"
+                            % (new_id, save_path))
+        save_last_dir(os.path.dirname(save_path))
+    else:
+        show_message_dialog(gtk.MESSAGE_ERROR, "Save failed or file too small.")
+
+    new_container = None
+
 # --------------------------------
 # Batch Save to .gwy
 # --------------------------------
 def save_as_gwy(button, channel_liststore, state):
     """Save each SPM file's selected channels into a single .gwy file (report files saved)."""
     DATA_KEY_L = "/%d/data"
-    TITLE_KEY_L = "/%d/data/title"
-    SHOW_KEY_L = "/%d/data/visible"
-    PALETTE_KEY_L = "/%d/base/palette"
-    LOG_KEY_L = "/%d/log"
-    RANGE_KEY_L = "/%d/base/range"
-    RANGE_TYPE_KEY_L = "/%d/base/range-type"
-
     # Gather selected unique (filename, data_id)
     selected = []
     seen = set()
@@ -1347,6 +1446,7 @@ def selection_changed(selection, index, container, data_id, state, *args):
             state.width_entry.set_text("")
             state.height_entry.set_text("")
 
+##
 
 def check_current_selection(state):
     if not gwy.gwy_app_data_browser_get_containers():
@@ -2091,7 +2191,7 @@ def _find_autoprocess_window():
     return None
 
 
-# ---------- Entry point required by Gwyddion ----------------
+# ---------- Entry point required by Gwyddion ----------
 def run(data, mode):
     """
     Gwyddion entry point. Enforce a strict single AutoProcess window:
