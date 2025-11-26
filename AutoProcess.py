@@ -363,7 +363,7 @@ def create_gui(state):
 
     left_vbox = gtk.VBox(spacing=5)
     right_vbox = gtk.VBox(spacing=5)
-    right_vbox.set_size_request(305, -1)  # Fixed right pane width
+    right_vbox.set_size_request(325, -1)  # Fixed right pane width
     main_hbox.pack_start(left_vbox, True, True, 2)
     main_hbox.pack_start(right_vbox, False, False, 2)
 
@@ -656,7 +656,7 @@ def create_gui(state):
     hbox_spm = gtk.HBox(spacing=7)
     right_vbox.pack_start(hbox_spm, False, False, 2)
 
-    vbox_spm = gtk.VBox(spacing=5)
+    vbox_spm = gtk.VBox(spacing=1)
     hbox_spm.pack_start(vbox_spm, True, True, 2)
 
     OpenSPM_Files_label = gtk.Label()
@@ -664,38 +664,50 @@ def create_gui(state):
     OpenSPM_Files_label.set_alignment(0, 0.5)
     vbox_spm.pack_start(OpenSPM_Files_label, False, False, 2)
 
-    # Row: select-all + per-index selection + save .gwy
-    hbox_select = gtk.HBox(spacing=5)
+        # === Perfect row: Select All + Combobox + Buttons (normal combobox height!) ===
+    hbox_select = gtk.HBox(spacing=8)
     vbox_spm.pack_start(hbox_select, False, False, 0)
 
+    # Left: Select All checkbox
     state.select_all_check = gtk.CheckButton("Select All")
     state.select_all_check.set_active(False)
     state.select_all_check.connect("toggled", sync_select_all_check,
                                    state.channel_liststore, state)
-    hbox_select.pack_start(state.select_all_check, False, False, 5)
+    hbox_select.pack_start(state.select_all_check, False, False, 0)
 
+    # === Combobox — FORCED to normal height ===
     temp_store = gtk.ListStore(str, bool, str)
     state.select_dropdown = gtk.ComboBox(temp_store)
-    state.select_dropdown.set_size_request(350, 25)
+    
     renderer_text = gtk.CellRendererText()
     state.select_dropdown.pack_start(renderer_text, True)
     state.select_dropdown.add_attribute(renderer_text, "text", 0)
-    state.select_dropdown.set_active(0)
+    
+    # Critical: force natural height
+    state.select_dropdown.set_size_request(-1, -1)  # no height override
     state.select_dropdown.connect("changed", select_dropdown_changed,
                                   state.channel_liststore, state)
-    hbox_select.pack_start(state.select_dropdown, True, True, 5)
 
-    # Existing "Save As .GWY" (one file per SPM)
+    # Wrap in alignment to prevent GTK from stretching it vertically
+    align_combo = gtk.Alignment(xalign=0.0, yalign=0.5, xscale=1.0, yscale=0.0)
+    align_combo.add(state.select_dropdown)
+    
+    hbox_select.pack_start(align_combo, True, True, 0)
+
+    # === Right: Buttons stacked vertically ===
+    vbox_buttons = gtk.VBox(spacing=4)
+
     save_gwy_button = gtk.Button("Save As .GWY")
-    save_gwy_button.set_size_request(-1, 25)
+    save_gwy_button.set_size_request(100, 24)
     save_gwy_button.connect("clicked", lambda b: save_as_gwy(b, state.channel_liststore, state))
-    hbox_select.pack_start(save_gwy_button, False, False, 5)
+    vbox_buttons.pack_start(save_gwy_button, False, False, 0)
 
-    # NEW: Save all selected channels into ONE merged .gwy
     save_merged_button = gtk.Button("Save Merged")
-    save_merged_button.set_size_request(-1, 25)
+    save_merged_button.set_size_request(100, 24)
     save_merged_button.connect("clicked", lambda b: save_selected_as_single_gwy(b, state.channel_liststore, state))
-    hbox_select.pack_start(save_merged_button, False, False, 0)
+    vbox_buttons.pack_start(save_merged_button, False, False, 0)
+
+    hbox_select.pack_start(vbox_buttons, False, False, 0)
 
     # File + channel table
     scrolled_channels = gtk.ScrolledWindow()
