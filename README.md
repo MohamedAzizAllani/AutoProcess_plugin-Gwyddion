@@ -3,16 +3,17 @@
 Fast batch toolbox for SPM data processing inside Gwyddion (Python 2.7 / pygwy).
 
 ### Screenshot
- ![AutoProcess GUI](https://github.com/user-attachments/assets/baf0cec1-ff62-4096-82e6-f244d9f6dad2)
+ ### Screenshot
+<img src="https://github.com/user-attachments/assets/baf0cec1-ff62-4096-82e6-f244d9f6dad2" width="600"/>
 
 ### Features
-- Fixed or full color range, invert mapping, zero-to-min (reversible)
+- Fixed or full color range, invert mapping, zero-to-min 
 - Apply any Gwyddion gradient/palette
 - Batch rename selected channels
-- Crop by coordinates or live rectangle selection (in-place or new channel, keep lateral offsets)
-- Load & replay processing macro from log file (exact reproduction of recorded tools)
-- Batch save per original file as .gwy (preserves logs & color metadata)
-- Save all selected channels merged into one perfect .gwy
+- Crop by coordinates or live rectangle selection 
+- Load & replay processing macro from log file
+- Batch save per original file as .gwy 
+- Save all selected channels merged into one  .gwy
 - Live file/channel browser with select-all, index-based selection, and file closing
 
 ### How to replay a macro 
