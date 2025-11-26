@@ -33,7 +33,7 @@ Recommended working setup (still valid in 2025 for maximum compatibility):
 2. Install **Python 2.7.13** (32-bit)  
 
 3. Install the three required packages (gwy, gtk, pygtk) – easiest way: use the pre-built pygwy console bundle from Gwyddion website or follow the official guide:  
-   → http://gwyddion.net/documentation/user-guide-en/python-scripting.html
+   → [https://gwyddion.net/documentation/user-guide-en/pygwy.html](https://gwyddion.net/documentation/user-guide-en/pygwy.html)
 
 4. Place the plugin file (`autoprocess.py`) into the pygwy folder:  
    - Windows: `C:\Users\<you>\.gwyddion\pygwy\`  
