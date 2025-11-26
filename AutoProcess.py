@@ -1473,12 +1473,9 @@ def check_current_selection(state):
     if not data_view:
         return True
 
-    
-    view_changed = (data_view != getattr(state, "current_data_view", None))
-    channel_changed = (
-        current_container != state.current_container or
-        current_data_id != state.current_data_id
-    )
+    container_changed = (current_container != state.current_container)
+    view_changed = container_changed or (data_view != state.current_data_view)
+    channel_changed = (current_data_id != state.current_data_id)
 
     if not view_changed and not channel_changed:
         x, y, w, h = get_selection_params(current_container, current_data_id)
@@ -1489,16 +1486,16 @@ def check_current_selection(state):
             state.height_entry.set_text(str(h))
         return True
 
-
-    logger.debug("Crop layer reattach triggered (view_changed=%s, channel_changed=%s)",
-                 view_changed, channel_changed)
+    logger.debug("Crop layer reattach triggered: container_changed=%s, view_changed=%s, channel_changed=%s",
+                 container_changed, view_changed, channel_changed)
 
     state.current_container = current_container
     state.current_data_id   = current_data_id
-    state.current_data_view = data_view  
+    state.current_data_view = data_view
 
     selection_key = "/%d/select/rectangle" % current_data_id
 
+    # Ensure selection object exists
     if not current_container.contains_by_name(selection_key):
         selection = gobject.new(gobject.type_from_name('GwySelectionRectangle'))
         selection.set_max_objects(1)
@@ -1506,31 +1503,32 @@ def check_current_selection(state):
 
     selection = current_container.get_object_by_name(selection_key)
 
-    # Clean old connections
+    # Disconnect any old signal handlers for this data_id
     for conn_id, cont, did in state.selection_connections[:]:
         if cont == current_container and did == current_data_id:
-            try: selection.disconnect(conn_id)
-            except: pass
+            try:
+                selection.disconnect(conn_id)
+            except:
+                pass
             state.selection_connections.remove((conn_id, cont, did))
 
-    # Reattach layer
+    # Reattach the crop layer (this is what makes the blue rectangle appear)
     layer = gobject.new(gobject.type_from_name('GwyLayerRectangle'))
     layer.set_selection_key(selection_key)
     layer.set_property("is-crop", True)
     data_view.set_top_layer(layer)
 
-    # Clean other selections
+    # Clean conflicting selections
     for key in ["/%d/select/pointer" % current_data_id,
                 "/%d/select/line" % current_data_id]:
         if current_container.contains_by_name(key):
             current_container.remove_by_name(key)
 
-    # Connect signal
+    # Connect fresh "changed" signal
     conn_id = selection.connect("changed", selection_changed,
                                 current_container, current_data_id, state)
     state.selection_connections.append((conn_id, current_container, current_data_id))
 
-    # Update fields
     x, y, w, h = get_selection_params(current_container, current_data_id)
     if x is not None and w > 0 and h > 0:
         state.x_entry.set_text(str(x))
@@ -1538,10 +1536,10 @@ def check_current_selection(state):
         state.width_entry.set_text(str(w))
         state.height_entry.set_text(str(h))
     else:
-        state.x_entry.set_text("0")
-        state.y_entry.set_text("0")
-        state.width_entry.set_text("0")
-        state.height_entry.set_text("0")
+        state.x_entry.set_text("")
+        state.y_entry.set_text("")
+        state.width_entry.set_text("")
+        state.height_entry.set_text("")
 
     return True
 
