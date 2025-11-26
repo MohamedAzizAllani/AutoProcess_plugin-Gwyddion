@@ -697,12 +697,12 @@ def create_gui(state):
     # === Right: Buttons stacked vertically ===
     vbox_buttons = gtk.VBox(spacing=4)
 
-    save_gwy_button = gtk.Button("Save As .GWY")
+    save_gwy_button = gtk.Button("Save Per file")
     save_gwy_button.set_size_request(100, 24)
     save_gwy_button.connect("clicked", lambda b: save_as_gwy(b, state.channel_liststore, state))
     vbox_buttons.pack_start(save_gwy_button, False, False, 0)
 
-    save_merged_button = gtk.Button("Save Merged")
+    save_merged_button = gtk.Button("Save All Merged")
     save_merged_button.set_size_request(100, 24)
     save_merged_button.connect("clicked", lambda b: save_selected_as_single_gwy(b, state.channel_liststore, state))
     vbox_buttons.pack_start(save_merged_button, False, False, 0)
