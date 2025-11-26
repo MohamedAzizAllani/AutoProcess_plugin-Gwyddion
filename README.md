@@ -2,9 +2,8 @@
 
 Fast batch toolbox for SPM data processing inside Gwyddion (Python 2.7 / pygwy).
 
-### Screenshot
  ### Screenshot
-<img src="https://github.com/user-attachments/assets/baf0cec1-ff62-4096-82e6-f244d9f6dad2" width="600"/>
+<img src="https://github.com/user-attachments/assets/baf0cec1-ff62-4096-82e6-f244d9f6dad2" width="400"/>
 
 ### Features
 - Fixed or full color range, invert mapping, zero-to-min 
