@@ -39,7 +39,7 @@ Recommended working setup (still valid in 2025 for maximum compatibility):
    - Windows: `C:\Users\<you>\.gwyddion\pygwy\`  
    - Linux/macOS: `~/.gwyddion/pygwy/`
 
-5. Restart Gwyddion → **AutoProcess** appears under the menu **/AutoProcess**
+5. Restart Gwyddion → **AutoProcess** appears under the menu **Data Process**
 
 For full Python API reference and examples:  
 http://gwyddion.net/documentation/user-guide-en/python-scripting.html
